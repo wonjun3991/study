@@ -6,11 +6,12 @@
 
 ```
 .
-├── inbox/          # 새 노트 기본 저장 위치
-├── daily/          # Daily notes
-├── templates/      # 노트 템플릿
-├── attachments/    # 이미지, 파일 첨부
-└── .obsidian/      # Obsidian 설정
+├── kubernetes-in-action/  # Kubernetes in Action 1st Ed 학습
+├── inbox/                 # 새 노트 기본 저장 위치
+├── daily/                 # Daily notes
+├── templates/             # 노트 템플릿
+├── attachments/           # 이미지, 파일 첨부
+└── .obsidian/             # Obsidian 설정
 ```
 
 ## Usage
