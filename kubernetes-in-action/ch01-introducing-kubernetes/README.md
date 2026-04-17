@@ -182,6 +182,76 @@ graph TB
 - **kubelet**: API 서버와 통신, 해당 노드의 컨테이너 관리
 - **kube-proxy**: Service에 대한 네트워크 트래픽을 로드밸런싱 (iptables/IPVS)
 
+### Self-managed vs Managed Kubernetes
+
+책에서는 직접 구축하는 K8s를 설명하지만, 실무에서는 대부분 **클라우드 Managed K8s**를 사용한다.
+
+```mermaid
+graph TB
+    subgraph SelfManaged["Self-managed (kubeadm, kops)"]
+        direction TB
+        SM_CP["Control Plane<br/>직접 구축/운영"]
+        SM_WK["Worker Nodes<br/>직접 구축/운영"]
+        SM_CP --> SM_WK
+    end
+
+    subgraph Managed["Managed (EKS / GKE / AKS)"]
+        direction TB
+        MG_CP["Control Plane<br/>클라우드가 운영"]
+        MG_WK["Worker Nodes<br/>사용자가 관리"]
+        MG_CP --> MG_WK
+    end
+
+    style SM_CP fill:#ff6347,stroke:#ff6347,color:#fff
+    style SM_WK fill:#ff6347,stroke:#ff6347,color:#fff
+    style MG_CP fill:#3cb371,stroke:#3cb371,color:#fff
+    style MG_WK fill:#ffd700,stroke:#ffd700,color:#000
+```
+
+#### 핵심 차이: 컨트롤 플레인을 누가 관리하는가
+
+| | Self-managed | Managed (EKS/GKE/AKS) |
+|---|---|---|
+| **API Server** | 직접 설치, HA 구성 | 클라우드가 운영, 엔드포인트만 제공 |
+| **etcd** | 직접 클러스터링, 백업, 복구 | **완전 관리** (접근 불가, 백업 자동) |
+| **Scheduler / CM** | 직접 설치, 설정 | 클라우드가 운영 |
+| **컨트롤 플레인 HA** | 직접 multi-master 구성 | **기본 HA** (multi-AZ 자동) |
+| **K8s 버전 업그레이드** | 직접 수행 (다운타임 리스크) | 콘솔/CLI로 트리거, 자동 롤링 |
+| **Worker Nodes** | 직접 프로비저닝 | 사용자가 관리 (또는 Fargate/Autopilot) |
+| **비용** | 인프라 + 운영 인력 | 컨트롤 플레인 시간당 과금 |
+
+> EKS/GKE에서 `kubectl get nodes` 하면 **Worker Node만** 보인다. Control Plane 노드는 클라우드 인프라에 숨겨져 있어 사용자가 접근할 수 없다.
+
+#### 클라우드별 특징
+
+**AWS EKS**
+- 컨트롤 플레인: 3개 AZ에 자동 분산, $0.10/hr (~월 $73)
+- Worker: EC2 직접 관리 / **Managed Node Group** (자동 AMI 업데이트) / **Fargate** (서버리스, 노드 관리 완전 불필요)
+- etcd: AWS 내부에서 관리, 사용자 접근 불가
+
+**GCP GKE**
+- 컨트롤 플레인: **무료** (Zonal), $0.10/hr (Regional HA)
+- Worker: 직접 관리 / **Autopilot** (노드 자동 관리 + Pod 단위 과금, 노드 개념 추상화)
+- GKE Autopilot은 Worker Node조차 사용자가 관리하지 않음 → 가장 추상화 수준이 높음
+
+**Azure AKS**
+- 컨트롤 플레인: **무료** (SLA 없음), 유료 Uptime SLA ($0.10/hr)
+- Worker: VM Scale Sets / **Virtual Nodes** (ACI 기반 서버리스)
+
+#### 추상화 수준 스펙트럼
+
+```
+관리 부담 높음 ◄──────────────────────────────► 관리 부담 낮음
+
+ kubeadm      EKS +        EKS +         GKE
+ (직접구축)    EC2 Nodes    Fargate      Autopilot
+    │             │            │            │
+ CP + Worker   Worker만      Pod만       Pod만 +
+ 모두 관리     관리          관리       노드도 자동
+```
+
+> **책에서 배우는 것**: K8s 내부 구조 (etcd, scheduler, kubelet 등)를 이해하는 것이 중요한 이유는, Managed K8s를 쓰더라도 **디버깅, 성능 튜닝, 아키텍처 결정** 시 이 지식이 필수적이기 때문이다.
+
 ### 애플리케이션 실행 흐름
 
 ```mermaid
