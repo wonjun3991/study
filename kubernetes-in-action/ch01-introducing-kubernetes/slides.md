@@ -87,10 +87,12 @@ style: |
 
 1. **쿠버네티스가 필요한 이유** — Monolith → Microservices
 2. **컨테이너 기술** — VM vs Container, Docker
-3. **쿠버네티스 아키텍처** — Control Plane & Worker Node
-4. **애플리케이션 실행 흐름** — 선언적 모델
-5. **Traditional MSA vs Kubernetes** — 무엇이 바뀌었는가
-6. **요약**
+3. **쿠버네티스 아키텍처** — Control Plane & Worker Node 상세
+4. **Self-managed vs Managed K8s** — EKS / GKE / AKS
+5. **애플리케이션 실행 흐름** — 선언적 모델
+6. **서비스 디스커버리 Deep Dive** — DNS → Eureka → K8s
+7. **Traditional MSA vs Kubernetes** — 무엇이 바뀌었는가
+8. **요약**
 
 ---
 
@@ -289,25 +291,162 @@ CPU, 메모리, 디스크 I/O, 네트워크 **사용량 제한**
 
 ---
 
-## Control Plane 구성요소
+## Control Plane — 구성요소 상세
 
-| 구성요소 | 역할 |
-|---------|------|
-| **API Server** | 모든 통신의 **중심 허브** — kubectl, kubelet 모두 여기로 |
-| **etcd** | 클러스터 전체 상태를 저장하는 **분산 KV 스토어** |
-| **Scheduler** | 리소스 요구사항에 따라 **Pod를 노드에 배치** |
-| **Controller Manager** | 복제본 관리, 노드 추적, **장애 자동 처리** |
+| 구성요소 | 역할 | 죽으면? |
+|---------|------|--------|
+| **API Server** | 유일한 진입점, 인증→인가→Admission→etcd | kubectl 불가, 새 스케줄링 불가 |
+| **etcd** | 모든 상태 저장 (Raft, Strong Consistency) | **클러스터 전체 상태 소실** |
+| **Scheduler** | Filtering→Scoring으로 Pod 배치 결정 | 새 Pod 배치 불가 |
+| **Controller Manager** | Reconciliation Loop 묶음 | Pod 재생성 안 됨 |
+| **Cloud Controller** | 클라우드 API 연동 (LB 프로비저닝) | LoadBalancer 생성 불가 |
 
-## Worker Node 구성요소
-
-| 구성요소 | 역할 |
-|---------|------|
-| **kubelet** | API Server와 통신, 해당 노드의 **컨테이너 관리** |
-| **kube-proxy** | Service의 네트워크 트래픽 **로드밸런싱** (iptables/IPVS) |
+> 모든 구성요소가 죽어도 **이미 실행 중인 Pod는 계속 동작**한다.
+> kubelet이 독립적으로 컨테이너를 유지하기 때문.
 
 ---
 
-# 4. 애플리케이션 실행 흐름
+## kube-apiserver — 유일한 진입점
+
+```
+kubectl ──►
+kubelet ──► kube-apiserver ◄──► etcd
+scheduler ─►       │
+controller ►       │
+             인증 → 인가 → Admission → etcd 저장
+```
+
+- **RESTful API**: 모든 K8s 리소스를 CRUD하는 HTTP API
+- **인증(AuthN)**: 요청자가 누구인지 (인증서, 토큰, OIDC)
+- **인가(AuthZ)**: 해당 작업 권한이 있는지 (RBAC)
+- **Admission Control**: 요청을 변형/거부하는 플러그인 체인
+- **Watch**: 리소스 변경을 실시간 구독 (Controller, kubelet 모두 사용)
+
+---
+
+## etcd — 클러스터의 뇌
+
+```
+etcd에 저장되는 것:
+├── /registry/pods/default/nginx-abc
+├── /registry/services/default/my-svc
+├── /registry/deployments/...
+├── /registry/secrets/...
+└── /registry/nodes/worker-1
+```
+
+- **Raft 합의**: 3대 → 1대 장애 허용, 5대 → 2대 장애 허용
+- **Strong Consistency**: 쓰기 확정 → 어느 노드에서 읽어도 동일
+- **API Server만 접근**: 다른 모든 구성요소는 API Server를 거침
+- **백업이 가장 중요**: etcd 소실 = 클러스터 전체 상태 소실
+
+---
+
+## kube-scheduler — Pod를 어디에?
+
+```
+새 Pod 생성 요청
+      │
+ 1. Filtering (걸러내기)
+      │  리소스 부족 노드 제외
+      │  Taint/Toleration 불일치 제외
+      │  NodeSelector 불일치 제외
+      ▼
+ 2. Scoring (점수 매기기)
+      │  리소스 균형 (여유 노드 선호)
+      │  Pod Affinity/Anti-Affinity
+      │  각 노드에 0~100점
+      ▼
+ 3. Binding (결정)
+      │  최고 점수 노드에 할당
+      └──► API Server에 기록
+```
+
+> Scheduler는 **배치만 결정**. 실제 컨테이너 실행은 kubelet이 한다.
+
+---
+
+## kube-controller-manager — Reconciliation Loop
+
+하나의 프로세스 안에 **여러 독립 컨트롤러**가 동작:
+
+| 컨트롤러 | 하는 일 |
+|---------|--------|
+| **ReplicaSet** | replicas: 3인데 2개 → 1개 추가 생성 |
+| **Deployment** | Rolling Update 관리 (새 RS 생성 → 이전 축소) |
+| **Node** | 노드 응답 없으면 → NotReady → Pod 재스케줄링 |
+| **EndpointSlice** | Service의 Pod 목록 관리 (서비스 디스커버리 핵심) |
+
+```
+while true:
+    desired = API Server에서 원하는 상태
+    actual  = 현재 상태
+    if desired != actual:
+        수정 요청 (create/delete/update)
+```
+
+---
+
+## Worker Node 구성요소
+
+### kubelet — 노드의 에이전트
+
+- 자기 노드에 할당된 Pod를 감지 → Container Runtime에 실행 지시
+- **Liveness/Readiness/Startup Probe** 실행
+- 노드 상태를 주기적으로 API Server에 보고
+- **Static Pod**: 로컬 파일로 Pod 실행 (CP 구성요소가 이 방식)
+
+> kubelet은 **유일하게 컨테이너가 아닌 시스템 프로세스**로 실행.
+> 컨테이너를 관리하는 주체는 자기 자신이 컨테이너일 수 없다.
+
+### kube-proxy — 서비스 네트워킹
+
+- Service/EndpointSlice 변경 감지 → iptables/IPVS 규칙 업데이트
+- **iptables** (기본): O(n), 소규모 / **IPVS**: O(1), 대규모
+
+---
+
+# 4. Self-managed vs Managed K8s
+
+---
+
+## 컨트롤 플레인을 누가 관리하는가?
+
+| | Self-managed | Managed (EKS/GKE/AKS) |
+|---|---|---|
+| **API Server** | 직접 설치, HA 구성 | 클라우드가 운영 |
+| **etcd** | 직접 클러스터링, 백업 | **완전 관리** (접근 불가) |
+| **Scheduler / CM** | 직접 설치 | 클라우드가 운영 |
+| **CP HA** | 직접 multi-master | **기본 HA** (multi-AZ) |
+| **K8s 업그레이드** | 직접 (다운타임 리스크) | 콘솔/CLI로 자동 롤링 |
+| **Worker Nodes** | 직접 프로비저닝 | 사용자 관리 (또는 Fargate) |
+
+> EKS/GKE에서 `kubectl get nodes` → **Worker만** 보인다.
+> Control Plane은 클라우드 인프라에 숨겨져 접근 불가.
+
+---
+
+## 추상화 수준 스펙트럼
+
+```
+관리 부담 높음 ◄────────────────────────► 관리 부담 낮음
+
+ kubeadm       EKS +        EKS +         GKE
+ (직접구축)     EC2 Nodes    Fargate      Autopilot
+    │              │            │            │
+ CP + Worker    Worker만      Pod만       Pod만 +
+ 모두 관리      관리          관리       노드도 자동
+```
+
+- **EKS Fargate**: 서버리스, 노드 관리 완전 불필요
+- **GKE Autopilot**: 노드 자동 관리 + Pod 단위 과금
+
+> 내부 구조를 아는 것이 중요한 이유:
+> Managed를 쓰더라도 **디버깅, 성능 튜닝, 아키텍처 결정** 시 필수.
+
+---
+
+# 5. 애플리케이션 실행 흐름
 
 ---
 
@@ -357,7 +496,96 @@ spec:
 
 ---
 
-# 5. Traditional MSA vs Kubernetes
+# 6. 서비스 디스커버리 Deep Dive
+
+---
+
+## 왜 서비스 디스커버리가 필요한가?
+
+MSA에서 상대 서비스의 **IP:Port**를 알아야 한다. 클라우드에서 IP는 동적이다.
+
+```
+정적 설정 → DNS → Client-Side → Server-Side → K8s → Service Mesh
+    │          │         │            │          │         │
+ 스케일      캐시로    JVM         LB가       L4만     L7 전부
+ 불가       stale    종속        SPOF      지원     근데 복잡
+```
+
+---
+
+## DNS가 실패하는 이유 — 4중 캐시
+
+| 캐시 레이어 | 기본 캐시 시간 |
+|------------|---------------|
+| **JVM InetAddress** | **∞ (영원히)** — SecurityManager 시 |
+| OS (nscd) | 3,600s ~ 86,400s |
+| DNS Resolver | TTL값 (30~3600s) |
+| 브라우저 | 60s (하드코딩) |
+
+그리고 **커넥션 풀이 DNS를 완전히 무시**한다:
+- TCP 연결이 맺어지면 DNS 재조회 안 함 (Apache HttpClient, OkHttp)
+- 실질적 stale window = `max(JVM TTL, 커넥션 풀 TTL)` = **분 ~ 무한대**
+
+> DNS TTL을 5초로 줘도, JVM이 영원히 캐싱하면 **의미 없다**.
+
+---
+
+## Eureka의 치명적 문제들
+
+### Self-Preservation — 좀비 인스턴스
+
+```
+인스턴스 10개 중 2개 죽음 → heartbeat 80% < 85%
+→ Self-preservation 발동
+→ 죽은 인스턴스가 레지스트리에 영구 유지 (좀비)
+→ 트래픽이 좀비에게 계속 전달
+```
+
+### 죽은 인스턴스 제거 worst-case: 5분 30초
+
+```
+T+0s     인스턴스 종료
+T+180s   Lease 만료 (90s × 2, renew 버그)
+T+240s   EvictionTask (60s 간격)
+T+270s   서버 캐시 갱신 (30s)
+T+300s   클라이언트 캐시 (30s)
+T+330s   Ribbon 캐시 (30s)
+```
+
+---
+
+## K8s가 해결한 방법
+
+### ClusterIP — DNS 캐시 문제를 구조적으로 해소
+
+```
+CoreDNS: svc-b → 10.96.100.1 (ClusterIP, 고정!)
+                     │
+              kube-proxy (커널)
+               iptables/IPVS
+              ┌──────┼──────┐
+              ▼      ▼      ▼
+           Pod A   Pod B   Pod C
+         (IP는 수시로 변경)
+```
+
+- ClusterIP는 **절대 안 바뀜** → DNS 캐시가 stale해도 무관
+- **커넥션 풀 문제 해소**: 커널이 매 패킷마다 실제 Pod로 라우팅
+
+---
+
+## K8s vs Eureka — 비교
+
+| 시나리오 | Eureka | K8s |
+|---------|--------|-----|
+| Graceful 종료 | 30~330초 | **~2-5초** |
+| Ungraceful 종료 | 180~330초 | **~30초** |
+| 좀비 인스턴스 | Self-preservation → 무한 유지 | **불가능** (Probe 지속 검증) |
+| 레지스트리 SPOF | Eureka 클러스터 장애 가능 | **없음** (etcd 내장) |
+
+---
+
+# 7. Traditional MSA vs Kubernetes
 
 ---
 
@@ -608,8 +836,10 @@ Pod A                        K8s
 1. **Monolith → Microservices**: 독립 배포 가능하지만, 운영 복잡도 급증
 2. **Container**: VM보다 가볍게 격리 제공 (Namespace + cgroups)
 3. **Docker**: Build → Ship → Run 표준화
-4. **Kubernetes**: 데이터센터를 **하나의 컴퓨팅 리소스**로 추상화
-5. **선언적 모델**: "이 상태를 유지해라" → K8s가 자동으로
+4. **Control Plane**: API Server, etcd, Scheduler, Controller Manager
+5. **Managed K8s**: EKS/GKE가 CP 관리 → 사용자는 Worker만 관리
+6. **선언적 모델**: "이 상태를 유지해라" → Reconciliation Loop
+7. **서비스 디스커버리**: DNS 캐시/Eureka SPOF → K8s ClusterIP로 해결
 
 > 기존 MSA는 인프라 관심사를 **앱 라이브러리에 내장** (JVM 종속)
 > K8s는 이를 **플랫폼 계층으로 이동** (언어 무관)
