@@ -281,16 +281,26 @@ RUN apt-get update && apt-get install -y curl \
 
 빌드 도구는 최종 이미지에 **불필요** — 스테이지를 분리
 
+<div class="columns">
+<div>
+
+### Stage 1: Build
+
 ```dockerfile
-# ── Stage 1: Build ──
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
+```
 
-# ── Stage 2: Runtime (빌드 결과물만 복사) ──
+</div>
+<div>
+
+### Stage 2: Runtime
+
+```dockerfile
 FROM node:20-alpine
 WORKDIR /app
 RUN npm ci --production
@@ -298,10 +308,10 @@ COPY --from=builder /app/dist ./dist
 ENTRYPOINT ["node", "dist/main.js"]
 ```
 
-| | 크기 | 포함 내용 |
-|---|------|----------|
-| Single-stage | **~800MB** | devDeps + 소스 + 빌드도구 |
-| Multi-stage | **~150MB** | 런타임 deps + 빌드 결과물만 |
+</div>
+</div>
+
+> Single-stage **~800MB** → Multi-stage **~150MB** (80%+ 절감)
 
 ---
 
