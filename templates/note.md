@@ -1,0 +1,8 @@
+---
+created: "{{date}}"
+tags: []
+---
+
+# {{title}}
+
+
