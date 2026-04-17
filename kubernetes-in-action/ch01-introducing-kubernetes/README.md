@@ -63,7 +63,8 @@ graph TB
         subgraph VM2[VM 2]
             GOS2[Guest OS] --> APP2[App B]
         end
-        HW1 --> HOS1 --> HYP --> VM1 & VM2
+        HW1 --> HOS1 --> HYP --> VM1
+        HYP --> VM2
     end
 
     subgraph CT["컨테이너 방식"]
@@ -79,7 +80,9 @@ graph TB
         subgraph C3[Container 3]
             APP5[App C]
         end
-        HW2 --> HOS2 --> CRT --> C1 & C2 & C3
+        HW2 --> HOS2 --> CRT --> C1
+        CRT --> C2
+        CRT --> C3
     end
 ```
 
@@ -262,8 +265,8 @@ graph TB
     OS --> RESOLVER["Corporate DNS Resolver<br/>TTL만큼 캐시"]
     RESOLVER --> AUTH["Authoritative DNS<br/>레코드 변경"]
     
-    style JVM fill:#ff634730,stroke:#ff6347
-    style OS fill:#ff634720,stroke:#ff6347
+    style JVM fill:#ff6347,stroke:#ff6347,color:#fff
+    style OS fill:#cc4f3a,stroke:#ff6347,color:#fff
 ```
 
 | 캐시 레이어 | 기본 캐시 시간 | 비고 |
@@ -323,8 +326,10 @@ graph TB
         E1[Eureka 1]
         E2[Eureka 2]
         E3[Eureka 3]
-        E1 <-.->|peer replication| E2
-        E2 <-.->|peer replication| E3
+        E1 -.->|peer replication| E2
+        E2 -.->|peer replication| E1
+        E2 -.->|peer replication| E3
+        E3 -.->|peer replication| E2
     end
     
     subgraph Service["Order Service (JVM)"]
@@ -518,9 +523,12 @@ graph TB
             S2HYS[Hystrix]
         end
         
-        EU <-.->|heartbeat| S1EUR & S2EUR
-        ZU -->|라우팅| SVC1 & SVC2
-        CFG -->|설정 배포| SVC1 & SVC2
+        EU -.->|heartbeat| S1EUR
+        EU -.->|heartbeat| S2EUR
+        ZU -->|라우팅| SVC1
+        ZU -->|라우팅| SVC2
+        CFG -->|설정 배포| SVC1
+        CFG -->|설정 배포| SVC2
     end
 
     subgraph After["Kubernetes MSA"]
@@ -539,11 +547,14 @@ graph TB
         KSV1[Service<br/>ClusterIP]
         KSV2[Service<br/>ClusterIP]
         
-        KING --> KSV1 & KSV2
+        KING --> KSV1
+        KING --> KSV2
         KSV1 --> POD1
         KSV2 --> POD2
-        KDNS -.->|DNS 자동 등록| KSV1 & KSV2
-        KCM -.->|env/volume 주입| POD1 & POD2
+        KDNS -.->|DNS 자동 등록| KSV1
+        KDNS -.->|DNS 자동 등록| KSV2
+        KCM -.->|env/volume 주입| POD1
+        KCM -.->|env/volume 주입| POD2
     end
 ```
 
@@ -647,8 +658,8 @@ graph TB
     BIZ -->|기존| LibLayer
     BIZ -->|K8s| PlatLayer
     
-    style LibLayer fill:#ff634720,stroke:#ff6347
-    style PlatLayer fill:#3cb37120,stroke:#3cb371
+    style LibLayer fill:#ff6347,stroke:#ff6347,color:#fff
+    style PlatLayer fill:#3cb371,stroke:#3cb371,color:#fff
 ```
 
 | 관심사 | 기존 (앱 내 라이브러리) | K8s (플랫폼 계층) |
