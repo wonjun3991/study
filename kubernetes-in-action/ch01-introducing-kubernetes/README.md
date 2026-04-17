@@ -172,15 +172,164 @@ graph TB
     API --> KL2
 ```
 
-**컨트롤 플레인 (마스터 노드)**
-- **API Server**: 모든 통신의 중심 허브
-- **etcd**: 클러스터 전체 상태를 저장하는 분산 KV 스토어
-- **Scheduler**: 리소스 요구사항에 따라 Pod를 워커 노드에 배치
-- **Controller Manager**: 복제본 관리, 노드 추적, 장애 처리
+#### 컨트롤 플레인 구성요소 상세
 
-**워커 노드**
-- **kubelet**: API 서버와 통신, 해당 노드의 컨테이너 관리
-- **kube-proxy**: Service에 대한 네트워크 트래픽을 로드밸런싱 (iptables/IPVS)
+##### 1) kube-apiserver — 모든 통신의 중심
+
+클러스터의 **유일한 진입점**. 모든 구성요소(kubectl, kubelet, scheduler, controller)는 반드시 API Server를 통해서만 통신한다. etcd에 직접 접근하는 구성요소는 API Server뿐이다.
+
+```
+kubectl ──►
+kubelet ──► kube-apiserver ◄──► etcd
+scheduler ─►       │
+controller ►       │
+                   │
+            (인증 → 인가 → Admission Control → etcd 저장)
+```
+
+- **RESTful API**: 모든 K8s 리소스(Pod, Service, Deployment 등)를 CRUD하는 HTTP API
+- **인증(Authentication)**: 요청자가 누구인지 확인 (인증서, 토큰, OIDC 등)
+- **인가(Authorization)**: 해당 사용자가 이 작업을 할 권한이 있는지 확인 (RBAC)
+- **Admission Control**: 요청을 변형(Mutating)하거나 거부(Validating)하는 플러그인 체인
+    - 예: `LimitRanger` — 리소스 요청이 없으면 기본값 주입
+    - 예: `PodSecurityAdmission` — 보안 정책 위반 Pod 거부
+- **Watch 메커니즘**: 클라이언트가 리소스 변경을 실시간으로 구독 (long-polling)
+    - Controller, Scheduler, kubelet 모두 watch를 통해 변경을 감지
+
+> API Server가 다운되면? kubectl 명령 불가, 새 스케줄링 불가. 단, **이미 실행 중인 Pod는 계속 동작**한다 (kubelet이 독립적으로 컨테이너를 유지).
+
+##### 2) etcd — 클러스터의 뇌
+
+클러스터의 **모든 상태**를 저장하는 분산 Key-Value 스토어. K8s에서 유일한 stateful 구성요소.
+
+```
+etcd에 저장되는 것:
+├── /registry/pods/default/nginx-abc    ← Pod 정의
+├── /registry/services/default/my-svc   ← Service 정의
+├── /registry/deployments/...           ← Deployment 정의
+├── /registry/secrets/...               ← Secret 데이터
+├── /registry/configmaps/...            ← ConfigMap
+└── /registry/nodes/worker-1            ← Node 상태
+```
+
+- **Raft 합의 알고리즘**: 3대 또는 5대로 클러스터링, 과반수(quorum) 합의로 데이터 기록
+    - 3대: 1대 장애 허용, 5대: 2대 장애 허용
+- **일관성**: Strong Consistency — 쓰기가 확정되면 어느 노드에서 읽어도 동일한 값
+- **Watch**: 키 변경 시 구독자에게 이벤트 푸시 → API Server의 watch 메커니즘의 근간
+- **직접 접근 금지**: API Server만 etcd에 접근. 다른 모든 구성요소는 API Server를 거침
+
+> etcd가 죽으면? 클러스터의 **전체 상태를 잃는다**. 그래서 etcd 백업이 K8s 운영에서 가장 중요한 작업 중 하나.
+
+##### 3) kube-scheduler — Pod를 어디에 배치할까
+
+**Unscheduled Pod**(노드가 아직 할당되지 않은 Pod)를 감지하고, 최적의 Worker Node를 골라서 할당하는 구성요소.
+
+```
+새 Pod 생성 요청
+      │
+      ▼
+ ┌─────────────────────────────────────┐
+ │          Scheduler 의사결정          │
+ │                                     │
+ │  1. Filtering (걸러내기)             │
+ │     - 리소스 부족한 노드 제외         │
+ │     - Taint/Toleration 불일치 제외   │
+ │     - NodeSelector 불일치 제외       │
+ │     - 후보 노드 목록 생성            │
+ │                                     │
+ │  2. Scoring (점수 매기기)            │
+ │     - 리소스 균형 (가장 여유로운 노드) │
+ │     - Pod Affinity/Anti-Affinity    │
+ │     - 데이터 로컬리티               │
+ │     - 각 노드에 0~100점             │
+ │                                     │
+ │  3. Binding (결정)                  │
+ │     - 최고 점수 노드에 Pod 할당      │
+ │     - API Server에 binding 기록     │
+ └─────────────────────────────────────┘
+```
+
+- **Filtering**: 조건을 만족하지 않는 노드를 제외 (리소스 부족, Taint 불일치, NodeSelector 등)
+- **Scoring**: 남은 후보 노드에 점수를 매겨 최적의 노드 선택 (리소스 균형, Affinity 등)
+- **Binding**: 선택된 노드에 Pod를 할당 (API Server → etcd에 기록)
+
+> Scheduler는 **배치만** 결정한다. 실제로 컨테이너를 실행하는 것은 해당 노드의 kubelet이다.
+
+##### 4) kube-controller-manager — Reconciliation Loop의 집합
+
+"Desired State ≠ Actual State"를 감지하고 수정하는 **컨트롤러들의 묶음**. 하나의 프로세스 안에 여러 독립 컨트롤러가 돌아간다.
+
+| 컨트롤러 | 하는 일 |
+|---------|--------|
+| **ReplicaSet Controller** | replicas: 3인데 2개만 있으면 → 1개 추가 생성 |
+| **Deployment Controller** | 새 버전 배포 시 Rolling Update 관리 (새 ReplicaSet 생성 → 이전 축소) |
+| **Node Controller** | Worker Node가 응답 없으면 → NotReady 표시 → Pod 재스케줄링 |
+| **Job Controller** | 일회성 작업 완료 추적 (성공/실패/재시도) |
+| **EndpointSlice Controller** | Service의 Pod 목록(Endpoint) 관리 → 서비스 디스커버리의 핵심 |
+| **ServiceAccount Controller** | 새 네임스페이스 생성 시 default ServiceAccount 자동 생성 |
+| **Namespace Controller** | 네임스페이스 삭제 시 안의 모든 리소스 정리 |
+
+각 컨트롤러는 독립적인 **Reconciliation Loop**를 실행한다:
+
+```
+while true:
+    desired = API Server에서 원하는 상태 읽기 (watch)
+    actual  = API Server에서 현재 상태 읽기
+    diff    = desired - actual
+    if diff:
+        API Server에 수정 요청 (create/delete/update)
+```
+
+> Controller Manager가 다운되면? 새로운 Reconciliation이 중단된다. Pod가 죽어도 재생성 안 됨, Deployment 롤링 업데이트 중단. 단, 이미 실행 중인 Pod는 영향 없음.
+
+##### 5) cloud-controller-manager (클라우드 환경 전용)
+
+클라우드 API와 연동하는 컨트롤러. EKS/GKE 같은 Managed K8s에서 자동으로 실행됨.
+
+| 컨트롤러 | 하는 일 |
+|---------|--------|
+| **Node Controller** | 클라우드 VM 상태 확인, 삭제된 VM의 Node 객체 정리 |
+| **Route Controller** | 클라우드 네트워크에 Pod 라우팅 테이블 설정 |
+| **Service Controller** | `type: LoadBalancer` Service 생성 시 → 클라우드 LB (ALB/NLB) 자동 프로비저닝 |
+
+```yaml
+# 이것만 적용하면
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app
+spec:
+  type: LoadBalancer   # ← cloud-controller-manager가 감지
+  ports:
+  - port: 80
+# → AWS에서 자동으로 NLB/ALB가 생성됨
+```
+
+#### 워커 노드 구성요소 상세
+
+##### kubelet — 노드의 에이전트
+
+각 Worker Node에서 실행되며, API Server의 지시를 받아 **컨테이너를 실제로 실행/관리**하는 에이전트.
+
+- API Server를 watch하여 자기 노드에 할당된 Pod를 감지
+- Container Runtime(containerd, CRI-O)에 컨테이너 실행 지시
+- **Liveness/Readiness/Startup Probe** 실행 → 실패 시 컨테이너 재시작 또는 Endpoint 제거
+- 노드 상태(CPU, 메모리, 디스크)를 주기적으로 API Server에 보고
+- **Static Pod**: API Server 없이도 로컬 파일(`/etc/kubernetes/manifests/`)의 Pod를 실행 가능
+    - Control Plane 구성요소(API Server, etcd 등)가 실은 kubelet의 Static Pod로 실행됨
+
+> kubelet은 **K8s 구성요소 중 유일하게 컨테이너가 아닌 시스템 프로세스**로 실행된다. kubelet이 컨테이너를 관리하므로, 자기 자신은 컨테이너일 수 없다.
+
+##### kube-proxy — 서비스 네트워킹
+
+각 Worker Node에서 실행되며, Service의 ClusterIP로 들어오는 트래픽을 실제 Pod로 라우팅한다.
+
+- API Server를 watch하여 Service/EndpointSlice 변경 감지
+- 변경 시 노드의 iptables/IPVS 규칙을 업데이트
+- 구현 모드:
+    - **iptables** (기본): 규칙 순회 O(n), 소규모에 적합
+    - **IPVS**: 해시 테이블 O(1), 대규모(10k+ 서비스)에 적합
+    - **nftables** (K8s 1.31+): iptables 후계자
 
 ### Self-managed vs Managed Kubernetes
 

@@ -251,7 +251,9 @@ ENTRYPOINT ["node", "app.js"]
 
 > 빌드 시간 **수 분 → 수 초**
 
-### 레이어 최적화 원칙
+---
+
+## 레이어 최적화 원칙
 
 | 원칙 | 이유 |
 |------|------|
@@ -260,11 +262,24 @@ ENTRYPOINT ["node", "app.js"]
 | RUN 명령 **합치기** | 불필요한 레이어 수 줄이기 |
 | **.dockerignore** 활용 | COPY 레이어 크기 줄이기 |
 
+### RUN 합치기
+
+```dockerfile
+# 나쁜 예 - 레이어 3개 (중간 레이어에 캐시 찌꺼기 남음)
+RUN apt-get update
+RUN apt-get install -y curl
+RUN rm -rf /var/lib/apt/lists/*
+
+# 좋은 예 - 레이어 1개
+RUN apt-get update && apt-get install -y curl \
+    && rm -rf /var/lib/apt/lists/*
+```
+
 ---
 
 ## Multi-stage Build
 
-빌드 도구는 최종 이미지에 **불필요**
+빌드 도구는 최종 이미지에 **불필요** — 스테이지를 분리
 
 ```dockerfile
 # ── Stage 1: Build ──
@@ -275,7 +290,7 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-# ── Stage 2: Runtime ──
+# ── Stage 2: Runtime (빌드 결과물만 복사) ──
 FROM node:20-alpine
 WORKDIR /app
 RUN npm ci --production
@@ -283,10 +298,10 @@ COPY --from=builder /app/dist ./dist
 ENTRYPOINT ["node", "dist/main.js"]
 ```
 
-```
-Single-stage:  ~800MB   (devDeps + 소스 + 빌드도구)
-Multi-stage:   ~150MB   (런타임 deps + 빌드 결과물만)
-```
+| | 크기 | 포함 내용 |
+|---|------|----------|
+| Single-stage | **~800MB** | devDeps + 소스 + 빌드도구 |
+| Multi-stage | **~150MB** | 런타임 deps + 빌드 결과물만 |
 
 ---
 
@@ -408,24 +423,20 @@ kubectl expose deployment kubia --type=LoadBalancer --name kubia-http
 ```
 
 ```
-외부 트래픽 흐름:
-
-  인터넷 → LoadBalancer (104.155.74.57:8080)
-               │
-               ▼
-           Service (kubia-http)
-               │
-               ▼
-           Pod (kubia-xxxxx)
-               │
-               ▼
-           Container (luksa/kubia → port 8080)
+인터넷 → LoadBalancer (104.155.74.57:8080)
+            │
+            ▼
+        Service (kubia-http)
+            │
+            ▼
+        Pod (kubia-xxxxx) → Container (luksa/kubia)
 ```
 
-**왜 Service가 필요한가?**
-- Pod는 **일시적** — 죽으면 새 IP로 재생성
-- Service는 **고정 엔드포인트** 제공
-- 뒤의 Pod들로 **로드밸런싱**
+| 이유 | 설명 |
+|------|------|
+| Pod는 **일시적** | 죽으면 새 IP로 재생성됨 |
+| Service = **고정 엔드포인트** | IP가 변하지 않음 |
+| **로드밸런싱** | 뒤의 Pod들로 트래픽 분산 |
 
 ---
 
@@ -525,12 +536,11 @@ Deployment (선언적 업데이트, 롤백)
 
 | 오브젝트 | 직접 생성? | 역할 |
 |----------|-----------|------|
-| **Deployment** | ✅ 직접 생성 | 롤링 업데이트, 롤백, RS 관리 |
-| **ReplicaSet** | ❌ 자동 생성 | Pod 수를 replicas 만큼 유지 |
-| **Pod** | ❌ 자동 생성 | 실제 컨테이너 실행 단위 |
+| **Deployment** | ✅ 직접 | 롤링 업데이트, 롤백, RS 관리 |
+| **ReplicaSet** | ❌ 자동 | Pod 수를 replicas 만큼 유지 |
+| **Pod** | ❌ 자동 | 실제 컨테이너 실행 단위 |
 
-> RS를 직접 만들 일은 없다. Deployment가 **전부 관리**한다.
-> 1판의 ReplicationController는 레거시 — 현재는 사용하지 않는다.
+> RS를 직접 만들 일은 없다. 1판의 RC는 레거시.
 
 ---
 
