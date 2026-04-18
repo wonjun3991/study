@@ -643,11 +643,14 @@ Eureka Server Registry
 
 ---
 
-### Stage 5: K8s가 해결한 방법
+### Stage 5: kube-proxy + CoreDNS가 해결한 방법
 
-#### DNS 문제 해결: ClusterIP (가상 IP)
+#### DNS 문제 해결: CoreDNS + ClusterIP (가상 IP)
 
-K8s는 DNS를 "인스턴스 IP 목록 반환"이 아니라 **"안정된 가상 IP 1개 반환"**으로 바꿨다:
+K8s는 DNS를 "인스턴스 IP 목록 반환"이 아니라 **"안정된 가상 IP 1개 반환"**으로 바꿨다. 이를 담당하는 두 구성요소:
+
+- **CoreDNS**: 서비스 이름(`payment-service`)을 고정 ClusterIP(`10.96.100.1`)로 변환하는 클러스터 내장 DNS 서버
+- **kube-proxy**: 각 Worker Node에서 ClusterIP로 들어오는 패킷을 실제 Pod IP로 커널 레벨(iptables/IPVS) 라우팅
 
 ```
 CoreDNS: payment-service → 10.96.100.1 (ClusterIP, 고정)
@@ -664,25 +667,25 @@ CoreDNS: payment-service → 10.96.100.1 (ClusterIP, 고정)
 - **커넥션 풀 문제 해소**: ClusterIP로 연결하면 커널이 매 패킷마다 실제 Pod로 라우팅
 - JVM DNS 캐시 문제도 사실상 무관 — ClusterIP가 변하지 않으므로
 
-#### 레지스트리 SPOF 해결: 별도 레지스트리 없음
+#### 레지스트리 SPOF 해결: kube-proxy의 분산 아키텍처
 
 ```
 Eureka 방식: App → Eureka Client → Eureka Server (별도 프로세스) → IP 목록
-K8s 방식:    App → DNS → ClusterIP → kube-proxy (모든 노드에 존재) → Pod
+K8s 방식:    App → CoreDNS → ClusterIP → kube-proxy (모든 노드에 존재) → Pod
 ```
 
-- etcd에 상태가 내장, 별도 레지스트리 프로세스가 없음
+- Eureka는 별도 레지스트리 서버가 필요하지만, K8s는 **CoreDNS**(이름 해석) + **kube-proxy**(라우팅)가 내장
 - kube-proxy가 **모든 Worker Node에** DaemonSet으로 실행 → 단일 장애점 없음
-- Endpoint Controller가 API Server를 **watch**하여 변경 즉시 반영
+- Endpoint Controller가 API Server를 **watch**하여 변경 즉시 kube-proxy의 라우팅 룰에 반영
 
 #### Stale 인스턴스 해결: Readiness Probe + 즉시 제거
 
-| 시나리오 | Eureka | K8s |
-|---------|--------|-----|
+| 시나리오 | Eureka | kube-proxy + CoreDNS |
+|---------|--------|----------------------|
 | Graceful 종료 | 30~330초 (heartbeat + 캐시 체인) | **~2-5초** (endpoint `ready=false` 즉시) |
-| Ungraceful 종료 | 180~330초 (renew 버그 + 캐시 체인) | **~30초** (readiness probe 3회 실패) |
-| 좀비 인스턴스 | Self-preservation으로 무한 유지 가능 | **불가능** (readiness probe가 지속 검증) |
-| 새 인스턴스 가시성 | 30~60초 (등록 + 캐시 전파) | **~5-10초** (Pod Ready → EndpointSlice) |
+| Ungraceful 종료 | 180~330초 (renew 버그 + 캐시 체인) | **~30초** (readiness probe 3회 실패 → kube-proxy 룰 갱신) |
+| 좀비 인스턴스 | Self-preservation으로 무한 유지 가능 | **불가능** (readiness probe가 지속 검증, kube-proxy 즉시 제거) |
+| 새 인스턴스 가시성 | 30~60초 (등록 + 캐시 전파) | **~5-10초** (Pod Ready → EndpointSlice → kube-proxy 반영) |
 
 #### K8s의 3-state 모델 (Eureka에 없는 것)
 
@@ -700,9 +703,9 @@ Eureka는 UP/DOWN 이진 상태만 있지만, K8s는 **ready/serving/terminating
 
 ### Stage 6: Service Mesh — 그 다음 단계
 
-K8s Service는 **L4 (TCP/UDP)** — HTTP 헤더, gRPC 메타데이터를 모름:
+kube-proxy + CoreDNS는 **L4 (TCP/UDP)** — HTTP 헤더, gRPC 메타데이터를 모름:
 
-| | K8s Service | Service Mesh (Istio/Linkerd) |
+| | kube-proxy + CoreDNS | Service Mesh (Istio/Linkerd) |
 |---|---|---|
 | mTLS | ❌ | ✅ 자동, 코드 변경 없음 |
 | Retry/Timeout | ❌ | ✅ 선언적 정책 |
@@ -799,11 +802,12 @@ graph LR
     end
 ```
 
-| | Eureka + Ribbon | K8s Service + CoreDNS |
+| | Eureka + Ribbon | kube-proxy + CoreDNS |
 |---|---|---|
-| 레지스트리 | 별도 Eureka Server 운영 필요 | 컨트롤 플레인에 내장 |
+| 이름 해석 | Eureka Server (별도 운영) | **CoreDNS** (클러스터 내장 DNS) |
+| 로드 밸런싱 | Ribbon (앱 내 JVM 라이브러리) | **kube-proxy** (커널 iptables/IPVS) |
 | 언어 지원 | JVM 중심 (Eureka Client) | **언어 무관 (DNS)** |
-| Stale 엔트리 | 최대 90초 (heartbeat 3회 미수신) | **Endpoint Controller가 즉시 갱신** |
+| Stale 엔트리 | 최대 90초 (heartbeat 3회 미수신) | **kube-proxy가 즉시 갱신** |
 | 앱 코드 결합 | `DiscoveryClient` 코드 필요 | **제로 — DNS 이름만 사용** |
 
 #### 2) 내부 통신 & 로드 밸런싱
@@ -884,7 +888,7 @@ graph TB
 | 관심사 | 기존 (앱 내 라이브러리) | K8s (플랫폼 계층) |
 |--------|------------------------|-------------------|
 | 서비스 디스커버리 | Eureka Client + Ribbon | CoreDNS + ClusterIP |
-| 로드 밸런싱 | Ribbon (in-process) | iptables/IPVS (kernel) |
+| 로드 밸런싱 | Ribbon (in-process) | kube-proxy (iptables/IPVS, kernel) |
 | API 게이트웨이 | Zuul / Spring Cloud Gateway | Ingress + Istio |
 | 설정 관리 | Spring Cloud Config Server | ConfigMap + Secret |
 | 상태 확인 / 복구 | Actuator + Eureka 제거 (90s) | Liveness/Readiness Probes (5s) |
@@ -905,5 +909,5 @@ graph TB
 - 개발자는 시스템 관리자 없이 K8s를 통해 앱을 배포할 수 있다
 - 서비스 디스커버리는 정적 설정 → DNS → Client-Side(Eureka) → Server-Side(Consul) → Platform(K8s) → Service Mesh로 진화했다
     - 각 단계는 이전 단계의 근본 문제를 해결했지만, 새로운 제약을 도입했다
-    - K8s는 ClusterIP(고정 가상 IP) + kube-proxy(커널 레벨 라우팅)로 DNS 캐시/커넥션 풀/레지스트리 SPOF 문제를 구조적으로 해결했다
+    - K8s는 CoreDNS(고정 ClusterIP 반환) + kube-proxy(커널 레벨 라우팅)로 DNS 캐시/커넥션 풀/레지스트리 SPOF 문제를 구조적으로 해결했다
 - 기존 MSA의 인프라 관심사(디스커버리, LB, 설정, 복구, 스케일링)를 앱 라이브러리에서 플랫폼 계층으로 이동시켰다

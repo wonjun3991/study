@@ -91,7 +91,7 @@ style: |
 3. **쿠버네티스 아키텍처** — Control Plane & Worker Node 상세
 4. **Self-managed vs Managed K8s** — EKS / GKE / AKS
 5. **애플리케이션 실행 흐름** — 선언적 모델
-6. **서비스 디스커버리 Deep Dive** — DNS → Eureka → K8s
+6. **서비스 디스커버리 Deep Dive** — DNS → Eureka → kube-proxy + CoreDNS
 7. **Traditional MSA vs Kubernetes** — 무엇이 바뀌었는가
 8. **요약**
 
@@ -426,14 +426,14 @@ while true:
 ```
 관리 부담 높음 ◄────────────────────────► 관리 부담 낮음
 
- kubeadm       EKS +        EKS +         GKE
+ kubeadm       EKS +        ECS +         GKE
  (직접구축)     EC2 Nodes    Fargate      Autopilot
     │              │            │            │
  CP + Worker    Worker만      Pod만       Pod만 +
  모두 관리      관리          관리       노드도 자동
 ```
 
-- **EKS Fargate**: 서버리스, 노드 관리 완전 불필요
+- **ECS Fargate**: 서버리스, 노드 관리 완전 불필요
 - **GKE Autopilot**: 노드 자동 관리 + Pod 단위 과금
 
 > 내부 구조를 아는 것이 중요한 이유:
@@ -549,7 +549,7 @@ T+330s   Ribbon 캐시 (30s)
 
 ---
 
-## K8s가 해결한 방법
+## K8s가 해결한 방법 — kube-proxy + CoreDNS
 
 ### ClusterIP — DNS 캐시 문제를 구조적으로 해소
 
@@ -564,19 +564,22 @@ CoreDNS: svc-b → 10.96.100.1 (ClusterIP, 고정!)
          (IP는 수시로 변경)
 ```
 
+- **CoreDNS**: 서비스 이름 → ClusterIP(고정 VIP) 변환하는 클러스터 DNS
+- **kube-proxy**: 각 노드에서 ClusterIP → 실제 Pod IP로 커널 레벨 라우팅
 - ClusterIP는 **절대 안 바뀜** → DNS 캐시가 stale해도 무관
 - **커넥션 풀 문제 해소**: 커널이 매 패킷마다 실제 Pod로 라우팅
 
 ---
 
-## K8s vs Eureka — 비교
+## Eureka vs kube-proxy + CoreDNS — 비교
 
-| 시나리오 | Eureka | K8s |
-|---------|--------|-----|
+| 시나리오 | Eureka | kube-proxy + CoreDNS |
+|---------|--------|----------------------|
 | Graceful 종료 | 30~330초 | **~2-5초** |
 | Ungraceful 종료 | 180~330초 | **~30초** |
 | 좀비 인스턴스 | Self-preservation → 무한 유지 | **불가능** (Probe 지속 검증) |
-| 레지스트리 SPOF | Eureka 클러스터 장애 가능 | **없음** (etcd 내장) |
+| 레지스트리 SPOF | Eureka 클러스터 장애 가능 | **없음** (kube-proxy가 전 노드 분산) |
+| DNS 캐시 문제 | 5중 캐시 체인 | **무관** (ClusterIP 고정) |
 
 ---
 
@@ -671,7 +674,7 @@ Service A                    Eureka Server
 
 ---
 
-## 서비스 디스커버리 — After: K8s Service + CoreDNS
+## 서비스 디스커버리 — After: kube-proxy + CoreDNS
 
 ```
 Pod A                        K8s
@@ -681,29 +684,32 @@ Pod A                        K8s
 │   :8080/api     │         │  10.96.x.x   │
 └────────┬────────┘         └──────────────┘
          │                   ┌─────────────┐
-         └──────────────────►│  Service    │
-                             │ (ClusterIP) │
+         └──────────────────►│  ClusterIP  │
+                             │ (가상 VIP)   │
                              └──┬──────┬───┘
-                        iptables│      │IPVS
+                        kube-   │      │  kube-
+                        proxy   │      │  proxy
                            ┌────▼─┐ ┌──▼───┐
                            │Pod B1│ │Pod B2│
                            └──────┘ └──────┘
 ```
 
-- 앱 코드에 SDK 불필요 — **DNS 이름만 사용**
-- Endpoint Controller → Pod 변경 **즉시 갱신** / 컨트롤 플레인 **내장**
+- **CoreDNS**: 서비스 이름 → 고정 ClusterIP 반환 (언어 무관)
+- **kube-proxy**: ClusterIP → 실제 Pod IP 커널 레벨 라우팅 (iptables/IPVS)
+- Endpoint Controller → Pod 변경 **즉시 갱신** / 앱 코드에 SDK 불필요
 
 ---
 
 ## 서비스 디스커버리 — 비교
 
-| | **Eureka + Ribbon** | **K8s Service + CoreDNS** |
+| | **Eureka + Ribbon** | **kube-proxy + CoreDNS** |
 |---|---|---|
-| 레지스트리 | 별도 서버 운영 필요 | **컨트롤 플레인 내장** |
+| 이름 해석 | Eureka Server (별도 운영) | **CoreDNS** (클러스터 내장) |
+| 로드 밸런싱 | Ribbon (앱 내 JVM 라이브러리) | **kube-proxy** (커널 iptables/IPVS) |
 | 언어 지원 | JVM 중심 | **언어 무관 (DNS)** |
 | Stale 엔트리 | 최대 **90초** | **즉시 갱신** |
 | 앱 코드 결합 | `DiscoveryClient` 필요 | **제로 — DNS만 사용** |
-| 장애 시 | Registry 다운 = 디스커버리 불가 | **etcd 기반 HA** |
+| 장애 시 | Registry 다운 = 디스커버리 불가 | **kube-proxy가 전 노드 분산** |
 
 > **코드 변화**:
 > `discoveryClient.getInstances("order")` → `http://order-service:8080`
@@ -834,7 +840,7 @@ Pod A                        K8s
 4. **Control Plane**: API Server, etcd, Scheduler, Controller Manager
 5. **Managed K8s**: EKS/GKE가 CP 관리 → 사용자는 Worker만 관리
 6. **선언적 모델**: "이 상태를 유지해라" → Reconciliation Loop
-7. **서비스 디스커버리**: DNS 캐시/Eureka SPOF → K8s ClusterIP로 해결
+7. **서비스 디스커버리**: DNS 캐시/Eureka SPOF → CoreDNS + kube-proxy로 해결
 
 > 기존 MSA는 인프라 관심사를 **앱 라이브러리에 내장** (JVM 종속)
 > K8s는 이를 **플랫폼 계층으로 이동** (언어 무관)
@@ -845,7 +851,7 @@ Pod A                        K8s
 
 | 관심사 | Before (앱 내부) | After (K8s 플랫폼) |
 |--------|-----------------|-------------------|
-| Discovery | Eureka Client | CoreDNS + Service |
+| Discovery | Eureka Client | CoreDNS |
 | LB | Ribbon | kube-proxy (IPVS) |
 | Config | Config Server | ConfigMap/Secret |
 | Health | Actuator + 수동 | Liveness/Readiness |
