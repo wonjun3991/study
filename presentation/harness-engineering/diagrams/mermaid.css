@@ -1,0 +1,39 @@
+/* 한글 폰트 강제 고정 — 깨짐(사용ス, 메시ㅈ) 방지 */
+* {
+  font-family: "Apple SD Gothic Neo", "Noto Sans KR", "Pretendard",
+               "Malgun Gothic", "Nanum Gothic", "Arial Unicode MS", sans-serif !important;
+  font-weight: 500;
+}
+
+/* 노드 내부 텍스트 */
+.nodeLabel, .edgeLabel, .cluster-label, .cluster text,
+foreignObject div, foreignObject span {
+  font-family: "Apple SD Gothic Neo", "Noto Sans KR", "Pretendard",
+               "Malgun Gothic", "Nanum Gothic", "Arial Unicode MS", sans-serif !important;
+  letter-spacing: -0.01em;
+}
+
+/* edge 라벨 배경을 반투명하게 — 밝은 배경에 자연스럽게 */
+.edgeLabel {
+  background-color: rgba(255, 255, 255, 0.85) !important;
+  padding: 2px 6px !important;
+  border-radius: 4px;
+}
+
+/* 노드 기본 stroke 두께 — 밝은 배경에서도 뚜렷하게 */
+.node rect, .node polygon, .node circle, .node ellipse {
+  stroke-width: 2px !important;
+}
+
+/* cluster(subgraph) 박스 — 반투명 파스텔 */
+.cluster rect {
+  fill-opacity: 0.35 !important;
+  stroke-width: 1.5px !important;
+  rx: 12;
+  ry: 12;
+}
+
+/* 화살표 선 */
+.flowchart-link {
+  stroke-width: 2px !important;
+}

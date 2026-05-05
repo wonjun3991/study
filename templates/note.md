@@ -2,7 +2,3 @@
 created: "{{date}}"
 tags: []
 ---
-
-# {{title}}
-
-

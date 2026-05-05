@@ -1,0 +1,43 @@
+---
+config:
+  theme: base
+  flowchart:
+    padding: 30
+    nodeSpacing: 55
+    rankSpacing: 65
+    htmlLabels: true
+  themeVariables:
+    background: "#ffffff"
+    fontFamily: "Apple SD Gothic Neo, Noto Sans KR, Pretendard, sans-serif"
+    fontSize: "26px"
+    primaryColor: "#f8f9fa"
+    primaryTextColor: "#1a1a2e"
+    primaryBorderColor: "#1a1a2e"
+    lineColor: "#495057"
+    edgeLabelBackground: "#ffffff"
+---
+flowchart LR
+    U["<b>사용자</b><br/><b>메시지</b><br/><br/><i>'어려운<br/>리팩터링<br/>분석해줘'</i>"]
+
+    S1["<b>① chat.message 훅</b><br/><i>메시지 파싱 직전</i><br/><br/>keyword-detector<br/>auto-slash-command<br/>model-guard"]
+
+    SIS["<b>② Orchestrator</b><br/><b>(Sisyphus)</b><br/><br/>task / subagent / skill<br/>자동 결정"]
+
+    S3["<b>③ tool.execute</b><br/><i>before / after</i><br/><br/>category-skill-reminder<br/>rules-injector<br/>directory-readme-injector<br/>edit-error-recovery<br/>hashline enhancer<br/><b>…+20개</b>"]
+
+    S4["<b>④ 전문 Agent</b><br/><i>내장 · 즉시 사용</i><br/><br/>Sisyphus · Junior<br/>Atlas · Hephaestus<br/>Prometheus<br/>Explore · Librarian<br/>Oracle · Momus · Metis"]
+
+    S5["<b>⑤ 자동 복구</b><br/><i>세션 관리</i><br/><br/>context-window-recovery<br/>session-recovery<br/>model-fallback<br/>preemptive-compaction"]
+
+    U --> S1 --> SIS --> S3
+    S3 -- "실행" --> S4
+    S4 -. "결과" .-> S3
+    S3 -. "실패" .-> S5
+    S5 -. "재시도" .-> S3
+
+    style U fill:#fff8dc,stroke:#d4a017,stroke-width:2.5px,color:#3d2e00
+    style S1 fill:#e8f5e9,stroke:#2e7d32,stroke-width:2.5px,color:#1b3a1f
+    style SIS fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2.5px,color:#2d1b3a
+    style S3 fill:#e3f2fd,stroke:#1565c0,stroke-width:2.5px,color:#0d2847
+    style S4 fill:#ffebee,stroke:#c62828,stroke-width:2.5px,color:#3d1515
+    style S5 fill:#fff3e0,stroke:#e65100,stroke-width:2.5px,color:#3d2600

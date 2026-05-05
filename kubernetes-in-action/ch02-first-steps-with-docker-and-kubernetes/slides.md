@@ -2,9 +2,9 @@
 marp: true
 theme: default
 paginate: true
-backgroundColor: #1a1a2e
-color: #e0e0e0
-style: |
+backgroundColor:
+color:
+style: |-
   section {
     font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
     background-color: #1a1a2e;
@@ -76,7 +76,7 @@ style: |
     font-size: 0.65em;
   }
 ---
-
+ttgr
 <!-- _class: lead -->
 
 # Kubernetes in Action

@@ -1,0 +1,39 @@
+---
+config:
+  theme: base
+  flowchart:
+    padding: 25
+    nodeSpacing: 60
+    rankSpacing: 70
+    htmlLabels: true
+  themeVariables:
+    background: "#ffffff"
+    fontFamily: "Apple SD Gothic Neo, Noto Sans KR, Pretendard, sans-serif"
+    fontSize: "22px"
+    primaryColor: "#f8f9fa"
+    primaryTextColor: "#1a1a2e"
+    primaryBorderColor: "#1a1a2e"
+    lineColor: "#495057"
+    edgeLabelBackground: "#ffffff"
+---
+flowchart LR
+    U["<b>사용자 메시지</b>"]
+
+    PRE["<b>① chat.message 훅</b><br/><br/>keyword-detector (5언어)<br/>auto-slash-command<br/>모델 가드"]
+
+    SIS["<b>② Orchestrator</b><br/><b>(Sisyphus)</b><br/><br/>task · subagent · skill<br/>자동 결정"]
+
+    TOOL["<b>③ tool.execute 훅</b><br/><br/>rules-injector<br/>category-skill-reminder<br/>edit-error-recovery<br/>hashline-enhancer<br/>…+20"]
+
+    AGENTS["<b>④ 전문 Agent</b><br/><br/>Sisyphus · Junior<br/>Atlas · Hephaestus<br/>Explore · Librarian<br/>Oracle · Momus · Metis"]
+
+    REC["<b>⑤ 자동 복구</b><br/><br/>context-window-recovery<br/>session-recovery<br/>model-fallback<br/>preemptive-compaction"]
+
+    U --> PRE --> SIS --> TOOL --> AGENTS --> REC
+
+    style U fill:#fff8dc,stroke:#d4a017,stroke-width:2.5px,color:#3d2e00
+    style PRE fill:#e8f5e9,stroke:#2e7d32,stroke-width:2.5px,color:#1b3a1f
+    style SIS fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2.5px,color:#2d1b3a
+    style TOOL fill:#e3f2fd,stroke:#1565c0,stroke-width:2.5px,color:#0d2847
+    style AGENTS fill:#ffebee,stroke:#c62828,stroke-width:2.5px,color:#3d1515
+    style REC fill:#fff3e0,stroke:#e65100,stroke-width:2.5px,color:#3d2600
