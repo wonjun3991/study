@@ -24,10 +24,22 @@ tags: [kubernetes, ch08, downward-api, serviceaccount, rbac]
 
 | 방식 | 가능한 값 |
 |------|-----------|
-| `fieldRef` | `metadata.name`, `metadata.namespace`, `metadata.uid`, `metadata.labels`, `metadata.annotations`, `status.podIP`, `status.hostIP`, `spec.nodeName`, `spec.serviceAccountName` |
-| `resourceFieldRef` | `requests.cpu`, `requests.memory`, `limits.cpu`, `limits.memory`, `requests.ephemeral-storage`, `limits.ephemeral-storage` |
+| `fieldRef` | `metadata.name`, `metadata.namespace`, `metadata.uid`, `metadata.labels`, `metadata.annotations`, `status.podIP`, `status.podIPs`, `status.hostIP`, `status.hostIPs`, `spec.nodeName`, `spec.serviceAccountName` |
+| `resourceFieldRef` | `requests.cpu`, `requests.memory`, `limits.cpu`, `limits.memory`, `requests.ephemeral-storage`, `limits.ephemeral-storage`, `requests.hugepages-*`, `limits.hugepages-*` |
 
-⚠️ **`metadata.labels`와 `metadata.annotations`는 env로 노출 불가**. 볼륨으로만 가능 (multi-line 값이라).
+⚠️ **`metadata.labels` / `metadata.annotations` 전체 노출은 env 불가, 볼륨만 가능** (multi-line 값이라).
+✅ 단, **단일 키 추출**(`metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`)은 **env로도 가능**.
+
+📌 **`status.podIPs` / `status.hostIPs`**: 듀얼스택(IPv4+IPv6) 환경에서 IP 슬라이스로 받음. 첫 번째 값은 `status.podIP` / `status.hostIP`와 동일.
+
+📌 **`hugepages-*`**: HugePages를 쓰는 워크로드(DPDK, JVM large pages)에서 `requests/limits.hugepages-2Mi`처럼 사용.
+
+📌 **Limits 미설정 시 fallback**: `limits.cpu` / `limits.memory`를 노출하는데 컨테이너에 limits가 없으면 kubelet이 **node allocatable 최대값**으로 채움 (0이 아님 — 의도치 않은 큰 값 주의).
+
+📌 **In-place resize와 downward API** (k8s v1.35 stable): 컨테이너 CPU/메모리 리소스가 런타임에 리사이즈되면
+- **볼륨 파일**: 자동 갱신 ✅
+- **환경 변수**: 컨테이너 재시작해야 갱신 ⚠️ (stale 위험)
+→ 리사이즈 환경에서 리소스 의존 정보는 **반드시 볼륨으로** 받아야 정합성 유지.
 
 ### 1.3 env로 주입
 
@@ -230,7 +242,8 @@ containers:
 1. **Pod 안에서 자기 Pod 이름을 알려면?**
    - Downward API env (`metadata.name`) 또는 `HOSTNAME` 환경변수 (Pod name과 동일)
 2. **Downward API로 `metadata.labels` 받으려면?**
-   - env 불가 (multi-line), **볼륨 마운트만** 가능
+   - **전체** labels: env 불가, **볼륨 마운트만** 가능
+   - **단일 키** (`metadata.labels['app']`): env로도 가능
 3. **Pod에서 API 서버 호출 시 인증은?**
    - 마운트된 SA 토큰(`/var/run/secrets/.../token`) + Bearer 헤더
 4. **RBAC 에러 "forbidden" 해결?**
@@ -239,6 +252,12 @@ containers:
    - 앱 코드에 인증 로직 불필요. 사이드카가 인증/암호화 처리
 6. **CPU limits=100m을 env로 받으면 값이 뭐?**
    - divisor: 1m이면 "100", divisor: 1이면 "0.1" (반올림 방식 주의)
+7. **컨테이너에 limits가 없는데 `limits.cpu`를 downward API로 노출하면?**
+   - **node allocatable 최대값**이 들어옴 (0 아님). 노드 스펙에 따라 큰 값으로 주입되는 함정
+8. **In-place resize 후 env / volume 동작 차이?**
+   - volume: 즉시 갱신. env: 컨테이너 재시작 전까지 stale. → 리소스 의존 로직은 volume 권장
+9. **`status.podIPs`와 `status.podIP` 차이?**
+   - `podIP`: primary IP 1개 (string). `podIPs`: 듀얼스택 IP 슬라이스 (첫 값은 podIP와 동일)
 
 ---
 
