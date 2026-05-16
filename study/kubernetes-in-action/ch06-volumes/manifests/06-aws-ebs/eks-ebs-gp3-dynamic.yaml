@@ -1,0 +1,71 @@
+# =============================================================================
+# AWS EKS 환경용 참고 YAML (현대 CSI 기반)
+# =============================================================================
+# ⚠️  로컬 minikube에서는 실행 안 됨. EKS 클러스터에서만 동작.
+#
+# 사전 요구사항:
+#   1. EKS 클러스터 생성
+#   2. aws-ebs-csi-driver 애드온 설치
+#      - eksctl create addon --name aws-ebs-csi-driver --cluster <name>
+#   3. IRSA로 ebs-csi-controller-sa에 EBS 권한 부여
+#      (AmazonEBSCSIDriverPolicy 연결)
+# =============================================================================
+
+# ------------------------------
+# 1) StorageClass — gp3 (현재 AWS 권장 default)
+# ------------------------------
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com              # ← in-tree kubernetes.io/aws-ebs 아님!
+volumeBindingMode: WaitForFirstConsumer   # ← Pod 스케줄 AZ 정해진 뒤 EBS 생성 (AZ mismatch 방지)
+reclaimPolicy: Delete                      # PVC 삭제 시 EBS도 삭제 (프로덕션은 Retain 권장)
+allowVolumeExpansion: true                 # PVC 용량 확장 허용
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+  encrypted: "true"
+  # kmsKeyId: "arn:aws:kms:..."            # 고객 관리형 KMS 키 쓸 경우
+
+---
+# ------------------------------
+# 2) PersistentVolumeClaim
+# ------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-pvc
+spec:
+  storageClassName: gp3
+  accessModes:
+    - ReadWriteOnce                        # EBS는 RWO만 지원 (여러 Pod 공유 필요 시 EFS 사용)
+  resources:
+    requests:
+      storage: 100Gi
+
+---
+# ------------------------------
+# 3) Pod (PVC 참조)
+# ------------------------------
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mongodb
+spec:
+  containers:
+  - image: mongo
+    name: mongodb
+    volumeMounts:
+    - name: mongodb-data
+      mountPath: /data/db
+    ports:
+    - containerPort: 27017
+      protocol: TCP
+  volumes:
+  - name: mongodb-data
+    persistentVolumeClaim:
+      claimName: mongodb-pvc

@@ -1,0 +1,46 @@
+# Ch07 - ConfigMap env 주입 예제
+# ConfigMap은 아래 커맨드로도 생성 가능:
+#   kubectl create configmap fortune-config --from-literal=sleep-interval=25
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fortune-config
+data:
+  sleep-interval: "25"
+  greeting: "Hello from ConfigMap"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fortune-env-from-configmap
+  labels:
+    app: fortune-env
+spec:
+  containers:
+  - image: luksa/fortune:env
+    name: html-generator
+    env:
+    - name: INTERVAL
+      valueFrom:
+        configMapKeyRef:
+          name: fortune-config
+          key: sleep-interval
+    # 전체 ConfigMap을 env로 주입 (접두사 CONFIG_ 적용)
+    envFrom:
+    - prefix: CONFIG_
+      configMapRef:
+        name: fortune-config
+    volumeMounts:
+    - name: html
+      mountPath: /var/htdocs
+  - image: nginx:alpine
+    name: web-server
+    volumeMounts:
+    - name: html
+      mountPath: /usr/share/nginx/html
+      readOnly: true
+    ports:
+    - containerPort: 80
+  volumes:
+  - name: html
+    emptyDir: {}

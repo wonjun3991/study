@@ -9,5 +9,6 @@
   "readableLineLength": true,
   "tabSize": 2,
   "defaultViewMode": "source",
-  "livePreview": true
+  "livePreview": true,
+  "promptDelete": false
 }

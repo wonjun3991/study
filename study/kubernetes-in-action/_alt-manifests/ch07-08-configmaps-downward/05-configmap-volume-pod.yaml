@@ -1,0 +1,38 @@
+# Ch07 - ConfigMap을 볼륨으로 마운트
+# ConfigMap은 --from-file 옵션으로 미리 생성:
+#   kubectl create configmap fortune-config-nginx --from-file=nginx.conf=04-configmap-volume-nginx.conf
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fortune-configmap-volume
+  labels:
+    app: fortune-cm-volume
+spec:
+  containers:
+  - image: luksa/fortune:env
+    name: html-generator
+    env:
+    - name: INTERVAL
+      value: "25"
+    volumeMounts:
+    - name: html
+      mountPath: /var/htdocs
+  - image: nginx:alpine
+    name: web-server
+    volumeMounts:
+    - name: html
+      mountPath: /usr/share/nginx/html
+      readOnly: true
+    - name: config
+      mountPath: /etc/nginx/conf.d
+      readOnly: true
+    ports:
+    - containerPort: 80
+      name: http
+  volumes:
+  - name: html
+    emptyDir: {}
+  - name: config
+    configMap:
+      name: fortune-config-nginx
+      defaultMode: 0644
