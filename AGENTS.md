@@ -46,6 +46,7 @@
 - **발표 자료 폴더 구성**:
   - `slides.md` (Marp), `diagrams/`, `reference/`, 그리고 빌드 산출물(아래 참조).
   - 다이어그램은 `marp-diagram-generation` skill 가이드라인을 따른다 (16:9, 큰 폰트).
+  - 슬라이드 테마/색상/폰트는 `marp-study-slides-style` skill을 적용한다 (dark navy + cyan/gold + Apple SD Gothic Neo). 신규 `slides.md`는 해당 skill의 front-matter 템플릿으로 시작.
 - **새 학습 주제**: `study/<new-topic>/` 폴더를 만들고, 챕터/섹션 단위로 하위 폴더를 둔다.
 - **Inbox 정리**: `inbox/`에 쌓인 노트는 주기적으로 분류해 `study/` 또는 `presentation/`로 옮긴다.
 
