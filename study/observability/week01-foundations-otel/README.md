@@ -1,5 +1,7 @@
 # 1주차: Observability 기초와 OpenTelemetry
 
+> **함께 보기**: [다이어그램 + lab 실측으로 따라가기](otel-prometheus-walkthrough.md)
+>
 > **출처**: [OpenTelemetry Docs — Signals](https://opentelemetry.io/docs/concepts/signals/) · [OTel Specification Status](https://opentelemetry.io/status/) · OTEP 0239 (Profiles)
 
 ---
