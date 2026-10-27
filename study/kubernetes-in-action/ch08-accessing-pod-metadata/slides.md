@@ -105,6 +105,38 @@ Pod 안의 앱이 자기 자신과 클러스터를 아는 법
 
 ---
 
+# 잠깐, 우리는 Pod을 직접 만들지 않는다
+
+![w:1100](./diagrams/deployment-hierarchy.png)
+
+- 보통 작성하는 건 `Deployment` YAML 한 장
+- Pod은 ReplicaSet이 자동 생성 → **이름·IP는 매번 다름**
+- 그래서 앱이 실행 시점에 자기 메타데이터를 알아야 함
+
+<!--
+이 챕터의 동기 부여 슬라이드.
+"왜 Downward API가 필요하지?" 라는 질문의 진짜 답은
+"우리는 Pod을 직접 만들지 않기 때문" 임을 먼저 짚어야 함.
+
+청중에게 던질 질문:
+- "여러분 manifest 작성할 때 Pod 직접 만드는 분?" → 거의 없음
+- "Deployment의 replicas: 3 쓰면 → ReplicaSet → Pod 3개 자동"
+- "그 Pod의 이름은? kubia-7d4b8c9f-x7k2n 같은 hash 붙은 자동 이름"
+
+→ 그래서 앱은 자기 이름을 미리 알 수 없음.
+→ 실행 시점에 받아야 함.
+→ 그게 Downward API.
+
+ownerReferences로 계층 구조가 표현됨:
+Pod.metadata.ownerReferences → ReplicaSet
+ReplicaSet.metadata.ownerReferences → Deployment
+
+ch04 ReplicationController, ch09 Deployment에서 더 자세히 다룸.
+이 발표에서는 "그래서 Pod이 자기 정보를 알아야 한다"는 motivation까지만.
+-->
+
+---
+
 <!-- _class: lead -->
 
 # 1. Downward API
@@ -211,6 +243,8 @@ env:
 가능한 리소스: `cpu`, `memory`, `ephemeral-storage`, `hugepages-*`
 (각각 `requests` / `limits`)
 
+> ⚠️ `limits` 미설정 시 → **node allocatable 최대값**으로 채움 (자세한 limits 동작은 ch14)
+
 <!--
 JVM 앱에서 "내 메모리 limit은?"을 알면 Heap 사이즈를 자동 설정 가능.
 divisor가 핵심:
@@ -222,6 +256,11 @@ divisor가 핵심:
 실제로는 정수만 받고 싶어서 divisor 1m 권장.
 
 hugepages-*는 DPDK나 JVM Large Pages 쓰는 경우. 일반적으로 불필요.
+
+limits 미설정 시 함정 (한 줄로만 언급):
+- 위 경고 한 줄로 인지만 시키고 깊이는 ch14에서.
+- 청중이 더 묻고 싶어하면: 32GB 노드면 32GB 들어옴 → JVM Heap 자동 설정 시 위험
+  → 항상 limits 명시 + divisor 가드 권장.
 -->
 
 ---
@@ -327,34 +366,34 @@ v1.35 stable의 in-place resize:
 
 ---
 
-# Limits 미설정 시 함정
+# 두 메커니즘, 같은 작업 ─ 비용 비교
 
-```yaml
-# Pod에 limits를 설정 안 했는데
-env:
-- name: MEMORY_LIMIT
-  valueFrom:
-    resourceFieldRef:
-      resource: limits.memory
-      divisor: 1
-```
+![w:1100](./diagrams/mechanism-comparison.png)
 
-→ kubelet이 **node allocatable 최대값**으로 채움
-→ 32GB 노드라면 → `MEMORY_LIMIT="34359738368"` (32GiB)
-→ 의도치 않은 큰 값 주의 ⚠️
+> Downward API로 끝낼 수 있으면 **항상** Downward API. API 호출은 "남의 정보"가 꼭 필요할 때만.
 
 <!--
-공식 문서에서만 명확히 설명된 함정:
-"limits 없으면 0이겠지?" → 아님. node allocatable 최대값.
+Part 1과 Part 2 사이의 브리지 슬라이드.
 
-JVM에서:
-- `-XX:MaxRAMPercentage=75` 사용
-- limits 없는 Pod에서 동작하면
-- node가 32GB일 때 Heap = 24GB로 잡혀버림
-- 다른 Pod 메모리까지 침범 → OOMKilled 연쇄
+같은 정보를 두 방식으로 받았을 때 비용 차이를 직접 비교:
+- 코드 줄 수: 1줄 vs 5+줄
+- 네트워크: 0회 vs 1회
+- 인증: 없음 vs TLS+Bearer+RBAC
+- 지연: ~0 vs 수십 ms
 
-해결: 항상 limits를 명시하거나, divisor 가드 코드 추가.
-이건 책에 없는 내용 — 공식 문서를 직접 본 사람만 아는 함정.
+핵심 메시지: "할 수만 있으면 Downward API. 그게 안 될 때만 API 호출."
+
+청중 흔한 실수:
+- Pod name 알려고 API 호출하기 (Downward env로 충분)
+- self-IP 알려고 API 호출하기 (status.podIP)
+- 자기 컨테이너 메모리 limit 알려고 API 호출하기 (resourceFieldRef)
+
+이 세 경우 모두 Downward API로 충분. API 호출이 필요한 진짜 use case는:
+- 다른 Pod 목록 조회 (peer discovery, Cassandra/Kafka)
+- Service 목록 조회 (자동 라우팅 도구)
+- Event watch (Operator 패턴)
+
+다음 슬라이드: 그 "남의 정보가 꼭 필요한" 경우들로 진입.
 -->
 
 ---
@@ -403,30 +442,46 @@ Downward API는 "셀프 서비스" — 자기 정보만.
 
 # 접근 경로
 
-```
-       Pod
-        │
-        │ HTTPS (Bearer token)
-        ▼
-kubernetes.default.svc.cluster.local
-        │
-        ▼
-     apiserver
-```
+![w:1100](./diagrams/api-access-path.png)
 
 - `kubernetes.default.svc` Service는 **모든 클러스터에 항상 존재**
 - ClusterIP는 클러스터마다 다르지만 DNS는 동일
 - 모든 Pod에서 자동으로 도달 가능
 
+---
+
+# 왜 HTTPS인가? ─ Bearer token의 운명
+
+![w:1100](./diagrams/https-threat-model.png)
+
+- Bearer token = 평문이면 캡처 즉시 **SA 권한 전체 탈취**
+- HTTPS = 토큰 암호화 + `ca.crt`로 서버 인증서 SAN 검증 (MITM 차단)
+- v1.20+ 부터 평문 8080 포트 **코드에서 제거**
+
 <!--
-"어디로 호출하지?" → 정해진 DNS가 있다.
-이건 K8s가 부트스트랩할 때 자동으로 만드는 Service.
+"왜 HTTPS인가"의 진짜 답은 보안 위협 모델로 설명해야 함.
 
-Pod 안에서:
-$ curl https://kubernetes.default.svc/api/v1
-→ 401 Unauthorized (인증 없이는 거부)
+핵심 메시지:
+1. Bearer token은 헤더에 평문. HTTP였다면 가로채면 끝.
+2. Pod-to-apiserver 트래픽은 노드 간 네트워크를 통과 (CNI overlay 포함).
+   "내부 네트워크니 안전하다"는 가정 X — k8s는 untrusted network 가정.
+3. ca.crt가 하는 일: apiserver가 제시한 인증서의 SAN(Subject Alternative Name)에
+   kubernetes.default.svc, 10.96.0.1 등이 들어있는지 검증.
+   → MITM이 가짜 인증서를 보내면 검증 실패 → 연결 거부.
 
-다음 슬라이드에서 인증.
+역사적 사실 (출처 확인됨):
+- v1.10: --insecure-port deprecated
+- v1.20 (PR #95856): insecure serving 코드 자체 제거
+- v1.24 (PR #106859): --insecure-port, --insecure-bind-address 플래그도 제거
+- 즉 현재 클러스터에서 평문으로 apiserver 띄우는 것 = 불가능
+
+왜 mTLS 아닌 Bearer? (청중이 물을 가능성 있음):
+- Pod은 동적 생성 → 인증서 사전 발급 어려움
+- JWT는 SA가 자동 생성, projected token으로 자동 만료/회전
+- mTLS가 필요한 고보안 환경: cert-manager로 별도 인증서 주입
+- 미래: KEP-4317 "Pod Certificates" (v1.35 beta) — 빌트인 mTLS 지원
+
+다음 슬라이드 연결: "HTTPS임은 알았다. 그럼 인증은?" → ServiceAccount 등장.
 -->
 
 ---
@@ -600,16 +655,7 @@ Java/Go/Python/Node.js 다 비슷한 코드.
 
 # 해법: kubectl proxy 사이드카
 
-```
-┌─────────── Pod ───────────┐
-│                           │
-│  ┌──────┐   HTTP    ┌──────────┐ │
-│  │ app  │──────────▶│ kubectl  │ │  HTTPS
-│  │      │ localhost │  proxy   │ │ ─────▶ apiserver
-│  │      │   :8001   │          │ │  + auth
-│  └──────┘            └──────────┘ │
-└──────────────────────────────────┘
-```
+![w:1100](./diagrams/ambassador-pattern.png)
 
 - `app`: `curl localhost:8001/api/...` (plain HTTP)
 - `proxy`: 토큰/cert 자동 처리

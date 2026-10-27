@@ -234,6 +234,8 @@ containers:
 | `luksa/kubectl-proxy:1.6.2` | `bitnami/kubectl` 또는 클라이언트 라이브러리 |
 | RBAC는 "선택" | **기본 활성화**. 권한 없으면 거부 |
 | Downward API는 Pod 필드만 | 여전히 동일. ConfigMap/Secret과 **Projected Volume**으로 통합 가능 |
+| **insecure port 8080** (`--insecure-port`)로 평문 HTTP 접근 가능 | **v1.20에서 코드 제거, v1.24에서 플래그도 제거**. HTTPS 6443만 가능 |
+| `kubernetes` Service의 관리 주체 명시 안 됨 | **kube-apiserver 내부 `bootstrap-controller`** (PostStartHook). controller-manager 아님 |
 
 ---
 
@@ -291,6 +293,41 @@ containers:
 - 예제는 `examples/Chapter08/` 원본 참고
 - `luksa/kubectl-proxy:1.6.2` 이미지는 오래됨 — `bitnami/kubectl`로 대체 가능
 - RBAC 실습은 추가 리소스(Role, RoleBinding) 필요
+
+## Deep dives (발표 준비 중 정리한 사실)
+
+### `kubernetes.default.svc` Service의 관리 주체
+
+`kubectl get svc kubernetes -n default`로 보이는 그 Service는 **kube-apiserver 자체**가 만들고 관리한다 — controller-manager가 아니다.
+
+- 코드 위치: `pkg/controlplane/controller/kubernetesservice/controller.go`
+- PostStartHook 이름: `"bootstrap-controller"`
+- 재생성 주기: 10초 (`DefaultEndpointReconcilerInterval`)
+- ClusterIP 결정: `--service-cluster-ip-range` CIDR의 index=1 IP (예: `10.96.0.0/12` → `10.96.0.1`)
+- HA Endpoints: 각 apiserver가 etcd에 TTL 15초 lease로 자기 IP를 갱신. 죽으면 최대 ~25초 안에 Endpoints에서 제거됨
+- EndpointSlice: apiserver의 `EndpointsAdapter`가 직접 관리 (skipMirror — controller-manager 무관)
+- Service 라벨: `provider=kubernetes`, `component=apiserver`. Selector는 nil (수동 관리)
+- 삭제 시: 10초 이내 동일 ClusterIP로 자동 재생성
+
+왜 controller-manager가 아닌 apiserver가? → controller-manager는 apiserver에 의존하므로 닭과 달걀 문제 회피.
+
+### apiserver HTTPS 강제 시점 (insecure port 제거 타임라인)
+
+- v1.10: `--insecure-port`, `--insecure-bind-address` deprecated (PR #59018)
+- v1.12: deprecated 경고 강화 (PR #67060)
+- **v1.20**: insecure serving **코드 자체 제거** (PR #95856). 플래그는 no-op으로만 남음
+- **v1.24**: `--insecure-port`, `--insecure-bind-address` **플래그도 제거** (PR #106859)
+
+현재(v1.24+) 클러스터에서 평문으로 apiserver를 띄우는 것은 물리적으로 불가능. 모든 통신이 6443 HTTPS만 가능.
+
+### Bearer token vs mTLS — Pod 인증 방식 선택
+
+Pod-to-API server는 단방향 TLS + Bearer token (JWT)을 사용. 이유:
+- Pod은 동적 생성 → 인증서 사전 발급 어려움
+- JWT는 SA가 자동 발급, projected token으로 자동 만료/회전 (v1.22+)
+- TokenRequest API로 발급된 토큰은 Pod에 바인딩 → Pod 삭제 시 즉시 무효화
+
+미래(v1.35 베타): **KEP-4317 "Pod Certificates"** — Pod이 빌트인 mTLS로 apiserver 인증 가능 예정.
 
 ## Questions
 

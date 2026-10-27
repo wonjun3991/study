@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chapter 15 — Automatic Scaling</title>
+<style>
+  :root{
+    --bg:#141428; --bg2:#1c2140; --bg3:#0f3460; --card:#1a2240;
+    --cardA:#1b2438; --code-bg:#0d1117; --border:#2a3358;
+    --cyan:#00d4ff; --cyan2:#7fdbff; --gold:#ffd700; --green:#00ff88;
+    --fg:#e6ecf5; --mut:#9fb0cc; --red:#ff6b6b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;overflow:hidden;background:#07070f;
+    font-family:'Apple SD Gothic Neo','Noto Sans KR',sans-serif;color:var(--fg);}
+
+  .stage-wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}
+  .stage{width:1280px;height:720px;position:relative;transform-origin:center center;}
+
+  .slide{
+    position:absolute;inset:0;padding:52px 60px 70px;
+    background:
+      radial-gradient(1200px 600px at 80% -10%, rgba(0,212,255,.10), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(255,215,0,.07), transparent 55%),
+      linear-gradient(160deg,#161634 0%,#11112a 60%,#0d0d22 100%);
+    border:1px solid var(--border);border-radius:16px;
+    opacity:0;visibility:hidden;transform:translateY(14px) scale(.995);
+    transition:opacity .42s ease, transform .42s ease, visibility .42s;
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  .slide.active{opacity:1;visibility:visible;transform:none;}
+
+  .kicker{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;
+    font-size:15px;letter-spacing:.06em;color:var(--cyan2);
+    background:rgba(0,212,255,.10);border:1px solid rgba(0,212,255,.30);
+    padding:5px 13px;border-radius:999px;margin-bottom:14px;}
+  .kicker .dot{width:7px;height:7px;border-radius:50%;background:var(--cyan);box-shadow:0 0 10px var(--cyan);}
+
+  h1{font-size:40px;font-weight:800;line-height:1.12;letter-spacing:-.01em;
+    color:#fff;margin-bottom:20px;}
+  h1 .hl{color:var(--cyan);}
+  h2{font-size:26px;color:var(--cyan);margin:6px 0 12px;}
+  h3{font-size:21px;color:var(--cyan2);margin-bottom:8px;}
+  p,li{font-size:20px;line-height:1.5;}
+  ul,ol{padding-left:24px;}
+  li{margin:8px 0;}
+  strong{color:var(--gold);font-weight:700;}
+  .mut{color:var(--mut);}
+  .small{font-size:17px;}
+  .tiny{font-size:15px;}
+  code{font-family:'SFMono-Regular',Consolas,monospace;background:#11203a;color:var(--green);
+    padding:1px 6px;border-radius:5px;font-size:.9em;}
+  pre{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;
+    padding:14px 16px;overflow:auto;}
+  pre code{background:none;color:#e6edf3;padding:0;font-size:15px;line-height:1.5;}
+  pre.sm{padding:10px 12px;}
+  pre.sm code{font-size:12px;line-height:1.42;}
+  pre.sm .cm{color:#7f93b5;}
+  .body{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center;}
+
+  /* cards */
+  .grid{display:grid;gap:16px;}
+  .g2{grid-template-columns:1fr 1fr;}
+  .g3{grid-template-columns:1fr 1fr 1fr;}
+  .card{background:linear-gradient(160deg,rgba(40,52,96,.55),rgba(22,28,56,.55));
+    border:1px solid var(--border);border-radius:14px;padding:18px 20px;}
+  .card.hot{border-color:rgba(255,215,0,.5);box-shadow:0 0 0 1px rgba(255,215,0,.15) inset;}
+  .card.cyan{border-color:rgba(0,212,255,.45);}
+  .card .ic{font-size:30px;margin-bottom:6px;display:block;}
+  .card h3{margin-bottom:6px;}
+  .card p,.card li{font-size:16px;line-height:1.45;}
+  .card ul{padding-left:20px;}
+
+  /* table */
+  table{border-collapse:collapse;width:100%;font-size:17px;}
+  th{background:#16203c;color:var(--cyan);padding:10px 13px;text-align:left;border:1px solid #26314f;font-weight:700;}
+  td{background:rgba(15,52,96,.45);padding:10px 13px;border:1px solid #26314f;vertical-align:top;}
+  td strong{color:var(--gold);}
+  table.kt{font-size:14px;}
+  table.kt th,table.kt td{padding:6px 10px;}
+  table.kt td code{font-size:.92em;}
+  table.kt td:first-child{white-space:nowrap;width:1%;}
+
+  blockquote{border-left:4px solid var(--gold);background:rgba(255,215,0,.06);
+    padding:12px 20px;border-radius:0 10px 10px 0;font-size:18px;}
+
+  .pillrow{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;}
+  .pill{background:rgba(0,212,255,.10);border:1px solid rgba(0,212,255,.3);
+    color:var(--cyan2);padding:6px 14px;border-radius:999px;font-size:15px;}
+  .pill.gold{background:rgba(255,215,0,.10);border-color:rgba(255,215,0,.35);color:var(--gold);}
+
+  /* lead/section slides */
+  .lead{align-items:center;justify-content:center;text-align:center;}
+  .lead .body{align-items:center;}
+  .lead .big{font-size:84px;font-weight:900;letter-spacing:-.02em;
+    background:linear-gradient(120deg,#00d4ff,#7fdbff 40%,#ffd700);
+    -webkit-background-clip:text;background-clip:text;color:transparent;}
+  .lead .sub{font-size:32px;color:var(--cyan2);margin-top:6px;font-weight:700;}
+  .lead .desc{font-size:23px;color:var(--fg);margin-top:24px;line-height:1.5;}
+  .lead .tag{margin-top:34px;font-size:18px;color:var(--gold);
+    border:1px solid rgba(255,215,0,.3);padding:8px 18px;border-radius:999px;}
+  .secnum{font-size:120px;font-weight:900;color:rgba(0,212,255,.14);line-height:1;margin-bottom:-10px;}
+
+  svg{display:block;width:100%;height:auto;}
+  .svgtext{font-family:'Apple SD Gothic Neo','Noto Sans KR',sans-serif;}
+
+  /* nav */
+  .nav{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);
+    display:flex;align-items:center;gap:14px;z-index:50;
+    background:rgba(16,18,38,.82);backdrop-filter:blur(8px);
+    border:1px solid var(--border);border-radius:999px;padding:8px 14px;
+    box-shadow:0 10px 30px rgba(0,0,0,.5);}
+  .nav button{width:42px;height:42px;border-radius:50%;border:1px solid var(--border);
+    background:linear-gradient(160deg,#22305a,#161c3a);
+    color:var(--cyan);font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+    transition:.18s;}
+  .nav button:hover{border-color:var(--gold);color:var(--gold);transform:translateY(-1px);}
+  .nav button:disabled{opacity:.32;cursor:default;transform:none;border-color:var(--border);color:var(--mut);}
+  .counter{font-size:16px;color:var(--fg);min-width:74px;text-align:center;font-variant-numeric:tabular-nums;}
+  .counter b{color:var(--cyan);}
+  .nav .title{max-width:280px;font-size:13px;color:var(--mut);white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;padding-right:6px;border-right:1px solid var(--border);}
+
+  .progress{position:fixed;top:0;left:0;height:4px;background:linear-gradient(90deg,#00d4ff,#ffd700);
+    width:0;z-index:60;transition:width .35s ease;box-shadow:0 0 12px rgba(0,212,255,.6);}
+
+  .hint{position:fixed;bottom:20px;right:20px;font-size:12px;color:var(--mut);z-index:50;opacity:.7;}
+  .edge{position:fixed;top:0;bottom:0;width:14%;z-index:40;cursor:pointer;}
+  .edge.l{left:0;} .edge.r{right:0;}
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+
+<div class="stage-wrap">
+  <div class="stage" id="stage">
+
+  <!-- ============ 1 TITLE ============ -->
+  <section class="slide lead" data-title="표지">
+    <div class="body">
+      <div class="big">Chapter 15</div>
+      <div class="sub">Automatic Scaling of Pods &amp; Cluster Nodes</div>
+      <div class="desc">부하에 따라 <strong>Pod·노드를 자동으로</strong> 늘리고 줄이는 법</div>
+      <div class="tag">핵심 질문 — 누가 · 무엇을 보고 · 무엇을 조절하는가?</div>
+    </div>
+  </section>
+
+  <!-- ============ 2 세 축 ============ -->
+  <section class="slide" data-title="오늘의 세 축">
+    <span class="kicker"><span class="dot"></span>OVERVIEW</span>
+    <h1>오늘의 <span class="hl">세 축</span></h1>
+    <div class="body">
+      <div class="grid g3">
+        <div class="card cyan"><span class="ic">↔️</span><h3>HPA</h3>
+          <p class="mut tiny">Horizontal Pod Autoscaler</p>
+          <p>Pod <strong>개수</strong>를 조절<br>(replica ↑↓)</p></div>
+        <div class="card cyan"><span class="ic">↕️</span><h3>VPA</h3>
+          <p class="mut tiny">Vertical Pod Autoscaler · 애드온</p>
+          <p>Pod의 <strong>requests/limits</strong><br>(크기) 조절</p></div>
+        <div class="card cyan"><span class="ic">🖥️</span><h3>Cluster Autoscaler</h3>
+          <p class="mut tiny">클라우드 프로바이더 연동</p>
+          <p><strong>노드</strong> 개수를 조절</p></div>
+      </div>
+      <blockquote style="margin-top:18px"><strong>HPA = 가로(개수), VPA = 세로(자원), CA = 노드.</strong> 이 세 단어면 구조가 잡힌다.</blockquote>
+      <p class="small mut" style="margin-top:10px;text-align:center">HPA ↔ CA는 <strong>협력</strong>(Pod↑→Pending→노드↑), HPA ↔ VPA(동일 자원)는 <strong>충돌</strong>.</p>
+    </div>
+  </section>
+
+  <!-- ============ 3 SECTION 1 ============ -->
+  <section class="slide lead" data-title="섹션 1: 수평 vs 수직">
+    <div class="body">
+      <div class="secnum">01</div>
+      <div class="big" style="font-size:60px">수평 vs 수직 확장</div>
+      <div class="desc">쿠버네티스 이전부터 <strong>모든 시스템에 공통</strong>인 두 방향</div>
+    </div>
+  </section>
+
+  <!-- ============ 4 수직 ============ -->
+  <section class="slide" data-title="수직 확장 Scale Up">
+    <span class="kicker"><span class="dot"></span>SCALE UP</span>
+    <h1>수직 확장 — <span class="hl">기계를 더 키운다</span></h1>
+    <div class="body">
+      <div class="grid g2" style="grid-template-columns:0.9fr 1.1fr;align-items:center">
+        <svg viewBox="0 0 320 220" aria-label="single server growing">
+          <rect x="70" y="120" width="80" height="70" rx="8" fill="#0f3460" stroke="#00d4ff" stroke-width="2"/>
+          <rect x="180" y="55" width="120" height="135" rx="10" fill="#16203c" stroke="#ffd700" stroke-width="2.5"/>
+          <text class="svgtext" x="110" y="160" fill="#9fb0cc" font-size="13" text-anchor="middle">4코어</text>
+          <text class="svgtext" x="240" y="118" fill="#ffd700" font-size="15" text-anchor="middle" font-weight="700">16코어</text>
+          <text class="svgtext" x="240" y="140" fill="#ffd700" font-size="15" text-anchor="middle" font-weight="700">64GB</text>
+          <path d="M158 150 L176 110" stroke="#ffd700" stroke-width="2.5" marker-end="url(#ar)"/>
+          <text class="svgtext" x="155" y="55" fill="#7fdbff" font-size="14" text-anchor="middle">+CPU +RAM +Disk</text>
+          <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L7,3 L0,6 Z" fill="#ffd700"/></marker></defs>
+        </svg>
+        <div class="grid g2" style="gap:12px">
+          <div class="card cyan"><h3 style="font-size:18px">✅ 장점</h3>
+            <ul class="tiny"><li><strong>단순함</strong> — 코드 그대로</li><li>분산 복잡성 없음</li><li><strong>stateful·RDB</strong>에 적합</li></ul></div>
+          <div class="card" style="border-color:rgba(255,107,107,.4)"><h3 style="font-size:18px;color:#ff9b9b">⚠️ 단점</h3>
+            <ul class="tiny"><li><strong>하드웨어 상한</strong></li><li><strong>SPOF</strong></li><li>보통 <strong>재부팅/다운타임</strong></li><li>고사양일수록 <strong>비용 폭증</strong></li></ul></div>
+        </div>
+      </div>
+      <p class="small mut" style="margin-top:14px;text-align:center">예: DB를 4코어/16GB → 16코어/64GB로 교체 (RDS 인스턴스 클래스 업그레이드)</p>
+    </div>
+  </section>
+
+  <!-- ============ 5 수평 ============ -->
+  <section class="slide" data-title="수평 확장 Scale Out">
+    <span class="kicker"><span class="dot"></span>SCALE OUT</span>
+    <h1>수평 확장 — <span class="hl">기계를 더 늘린다</span></h1>
+    <div class="body">
+      <div class="grid g2" style="grid-template-columns:0.9fr 1.1fr;align-items:center">
+        <svg viewBox="0 0 320 220" aria-label="load balancer with many servers">
+          <rect x="120" y="20" width="80" height="34" rx="8" fill="#16203c" stroke="#00d4ff" stroke-width="2"/>
+          <text class="svgtext" x="160" y="42" fill="#00d4ff" font-size="14" text-anchor="middle" font-weight="700">LB</text>
+          <g fill="#0f3460" stroke="#7fdbff" stroke-width="1.8">
+            <rect x="30" y="130" width="58" height="62" rx="7"/>
+            <rect x="101" y="130" width="58" height="62" rx="7"/>
+            <rect x="172" y="130" width="58" height="62" rx="7"/>
+            <rect x="243" y="130" width="58" height="62" rx="7"/>
+          </g>
+          <g stroke="#3a4670" stroke-width="1.6" fill="none">
+            <path d="M150 54 L59 130"/><path d="M155 54 L130 130"/>
+            <path d="M168 54 L201 130"/><path d="M172 54 L272 130"/>
+          </g>
+          <text class="svgtext" x="160" y="212" fill="#7fdbff" font-size="13" text-anchor="middle">동일 역할 인스턴스 N대</text>
+        </svg>
+        <div class="grid g2" style="gap:12px">
+          <div class="card cyan"><h3 style="font-size:18px">✅ 장점</h3>
+            <ul class="tiny"><li><strong>거의 선형 확장</strong></li><li><strong>HA</strong> — 한 대 죽어도 OK</li><li><strong>범용 장비</strong> (클라우드 친화)</li></ul></div>
+          <div class="card" style="border-color:rgba(255,107,107,.4)"><h3 style="font-size:18px;color:#ff9b9b">⚠️ 단점</h3>
+            <ul class="tiny"><li>앱이 <strong>무상태</strong> 전제</li><li>LB·<strong>데이터 일관성</strong></li><li>네트워크 → <strong>복잡성↑</strong></li></ul></div>
+        </div>
+      </div>
+      <p class="small mut" style="margin-top:14px;text-align:center">예: 웹 서버 1대 → 10대 + LB. DB는 read replica / 샤딩.</p>
+    </div>
+  </section>
+
+  <!-- ============ 6 트레이드오프 ============ -->
+  <section class="slide" data-title="핵심 트레이드오프">
+    <span class="kicker"><span class="dot"></span>TRADE-OFF</span>
+    <h1>핵심 <span class="hl">트레이드오프</span></h1>
+    <div class="body">
+      <table>
+        <tr><th></th><th>↕️ 수직 (Up)</th><th>↔️ 수평 (Out)</th></tr>
+        <tr><td>상한</td><td>하드웨어 한계</td><td><strong>사실상 무제한</strong></td></tr>
+        <tr><td>가용성</td><td>SPOF</td><td><strong>HA(분산)</strong></td></tr>
+        <tr><td>복잡성</td><td><strong>낮음</strong>(코드 그대로)</td><td>높음(분산 설계)</td></tr>
+        <tr><td>다운타임</td><td>보통 필요</td><td><strong>보통 무중단</strong></td></tr>
+        <tr><td>적합</td><td>RDB·stateful·레거시</td><td>stateless 웹/API·MSA</td></tr>
+        <tr><td>비용 곡선</td><td>고사양일수록 급증</td><td><strong>범용 장비로 완만</strong></td></tr>
+      </table>
+      <blockquote style="margin-top:14px">클라우드 네이티브는 <strong>수평 선호</strong>. 단 <strong>DB 등 stateful</strong>은 여전히 수직이 1차 → 그래서 k8s는 <strong>둘 다</strong> 제공.</blockquote>
+    </div>
+  </section>
+
+  <!-- ============ 7 SECTION 2 ============ -->
+  <section class="slide lead" data-title="섹션 2: Pod 단위">
+    <div class="body">
+      <div class="secnum">02</div>
+      <div class="big" style="font-size:60px">Pod 단위 스케일링</div>
+      <div class="desc">Pod 자체를 조절하는 두 방향<br><strong>수평(HPA, 개수)</strong> · <strong>수직(VPA, 크기)</strong></div>
+    </div>
+  </section>
+
+  <!-- ============ 8 HPA 위치 ============ -->
+  <section class="slide" data-title="HPA 컨트롤러 위치">
+    <span class="kicker"><span class="dot"></span>HPA</span>
+    <h1>HPA 컨트롤러는 <span class="hl">어디에 있나</span></h1>
+    <div class="body">
+      <div class="grid g2" style="grid-template-columns:1.05fr .95fr;align-items:center">
+        <svg viewBox="0 0 360 200">
+          <rect x="20" y="30" width="320" height="140" rx="12" fill="#11193a" stroke="#00d4ff" stroke-width="2"/>
+          <text class="svgtext" x="180" y="22" fill="#7fdbff" font-size="14" text-anchor="middle">kube-controller-manager</text>
+          <circle cx="120" cy="100" r="52" fill="none" stroke="#ffd700" stroke-width="2.5" stroke-dasharray="6 5"/>
+          <path d="M120 48 A52 52 0 0 1 168 86" fill="none" stroke="#ffd700" stroke-width="3" marker-end="url(#ar2)"/>
+          <text class="svgtext" x="120" y="96" fill="#ffd700" font-size="13" text-anchor="middle" font-weight="700">HPA 루프</text>
+          <text class="svgtext" x="120" y="114" fill="#9fb0cc" font-size="12" text-anchor="middle">15초마다</text>
+          <g class="svgtext" font-size="12" fill="#e6ecf5">
+            <text x="210" y="80">① 메트릭 조회</text>
+            <text x="210" y="103">② replica 계산</text>
+            <text x="210" y="126">③ scale 수정</text>
+          </g>
+          <defs><marker id="ar2" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#ffd700"/></marker></defs>
+        </svg>
+        <div>
+          <ul class="small">
+            <li>HPA는 <strong>별도 데몬/Pod이 아니다</strong> — 컨트롤 루프 하나.</li>
+            <li>대상의 <strong>scale 서브리소스</strong>(Deployment/RS/STS)를 수정.</li>
+            <li>주기: <code>--horizontal-pod-autoscaler-sync-period</code> (기본 15s)</li>
+          </ul>
+          <div class="pillrow"><span class="pill gold">API: autoscaling/v1 · v2 = apiserver built-in</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 9 메트릭 원천 ============ -->
+  <section class="slide" data-title="메트릭 수집 원천">
+    <span class="kicker"><span class="dot"></span>METRICS · 원천</span>
+    <h1>Pod 메트릭은 어떻게 <span class="hl">수집되나</span></h1>
+    <div class="body">
+      <p class="small mut" style="margin-bottom:14px">자원 사용량의 <strong>원천은 노드의 커널 cgroup</strong>. 위로 올라오는 경로:</p>
+      <svg viewBox="0 0 1000 150" style="max-height:170px">
+        <defs><marker id="arrow" markerWidth="11" markerHeight="11" refX="7" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#00d4ff"/></marker></defs>
+        <g class="svgtext">
+          <rect x="10" y="45" width="170" height="60" rx="10" fill="#16203c" stroke="#3a4670" stroke-width="1.5"/>
+          <text x="95" y="72" fill="#e6ecf5" font-size="15" text-anchor="middle" font-weight="700">컨테이너 실행</text>
+          <text x="95" y="92" fill="#9fb0cc" font-size="12" text-anchor="middle">커널이 cgroup에 기록</text>
+
+          <rect x="245" y="45" width="170" height="60" rx="10" fill="#0f3460" stroke="#00d4ff" stroke-width="1.5"/>
+          <text x="330" y="72" fill="#00ff88" font-size="15" text-anchor="middle" font-weight="700">cAdvisor</text>
+          <text x="330" y="92" fill="#9fb0cc" font-size="12" text-anchor="middle">cgroup 통계 읽기 (kubelet 내장)</text>
+
+          <rect x="480" y="45" width="200" height="60" rx="10" fill="#16203c" stroke="#3a4670" stroke-width="1.5"/>
+          <text x="580" y="72" fill="#e6ecf5" font-size="15" text-anchor="middle" font-weight="700">kubelet</text>
+          <text x="580" y="92" fill="#9fb0cc" font-size="12" text-anchor="middle">/metrics/resource 노출</text>
+
+          <rect x="745" y="45" width="245" height="60" rx="10" fill="#16203c" stroke="#ffd700" stroke-width="1.5"/>
+          <text x="867" y="72" fill="#ffd700" font-size="15" text-anchor="middle" font-weight="700">metrics-server</text>
+          <text x="867" y="92" fill="#9fb0cc" font-size="12" text-anchor="middle">15초마다 scrape</text>
+
+          <line x1="183" y1="75" x2="240" y2="75" stroke="#00d4ff" stroke-width="2.5" marker-end="url(#arrow)"/>
+          <line x1="418" y1="75" x2="475" y2="75" stroke="#00d4ff" stroke-width="2.5" marker-end="url(#arrow)"/>
+          <line x1="683" y1="75" x2="740" y2="75" stroke="#00d4ff" stroke-width="2.5" marker-end="url(#arrow)"/>
+        </g>
+      </svg>
+      <ul class="small" style="margin-top:10px">
+        <li><strong>cAdvisor</strong>: 컨테이너 자원 사용량 수집·노출 데몬, <strong>kubelet에 내장</strong>(별도 설치 X).</li>
+        <li>리눅스는 <strong>cgroup</strong> 기반, 그 외엔 런타임의 CRI Container Metrics.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ 10 kubelet 구성요소 ============ -->
+  <section class="slide" data-title="kubelet 구성요소">
+    <span class="kicker"><span class="dot"></span>kubelet</span>
+    <h1>kubelet 구성요소 — <span class="hl">cAdvisor는 일부일 뿐</span></h1>
+    <div class="body">
+      <div class="grid g2">
+        <div class="card hot"><h3>📊 메트릭 관련 (오늘 주제)</h3>
+          <ul class="tiny"><li><strong>cAdvisor</strong> — 컨테이너별 CPU/메모리 수집</li>
+          <li>Summary API — <code>/stats/summary</code> 요약</li>
+          <li><code>/metrics/resource</code> — metrics-server가 긁는 곳</li></ul></div>
+        <div class="card"><h3>⚙️ 그 외 kubelet이 하는 일</h3>
+          <ul class="tiny"><li><strong>SyncLoop</strong> — 원하는↔실제 Pod 상태 일치</li>
+          <li><strong>PLEG</strong> — 컨테이너 생성·종료 이벤트</li>
+          <li><strong>CRI 클라이언트</strong> — containerd/CRI-O에 기동 명령</li>
+          <li>Volume/Image · Probe/Status · Eviction · Node Lease</li></ul></div>
+      </div>
+      <blockquote style="margin-top:16px"><strong>kubelet = 노드 위 컨테이너의 생사·상태·자원·볼륨 책임 에이전트.</strong> cAdvisor는 그 안의 자원 측정 모듈일 뿐 — "왜 메트릭 엔드포인트가 kubelet에?"의 답.</blockquote>
+    </div>
+  </section>
+
+  <!-- ============ 11 Heapster 죽음 ============ -->
+  <section class="slide" data-title="Heapster의 죽음">
+    <span class="kicker"><span class="dot"></span>METRICS · 파이프라인</span>
+    <h1>Heapster의 죽음 → <span class="hl">지금의 파이프라인</span></h1>
+    <div class="body">
+      <div class="grid g2">
+        <div class="card" style="border-color:rgba(255,107,107,.4)">
+          <h3 style="color:#ff9b9b">❌ 예전 (책, Heapster)</h3>
+          <pre style="margin-top:8px"><code>kubelet/cAdvisor
+  → Heapster (집계, InfluxDB)
+  → HPA가 Heapster 직접 호출</code></pre>
+          <p class="tiny" style="margin-top:8px">HPA가 <strong>특정 구현에 직접 의존</strong> → 결합도↑·무거움.<br><strong>2019 retired</strong>.</p>
+        </div>
+        <div class="card cyan">
+          <h3>✅ 지금 (metrics-server)</h3>
+          <pre style="margin-top:8px"><code>kubelet(/metrics/resource)
+  ↑ metrics-server 15s scrape
+   (최근값만 메모리, 저장 X)
+  ↓ APIService 등록
+Aggregation Layer(apiserver 내장)
+  ↑ HPA / kubectl top 조회</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 12 plug/socket ============ -->
+  <section class="slide" data-title="인터페이스/소켓/구현체">
+    <span class="kicker"><span class="dot"></span>핵심 구조</span>
+    <h1>인터페이스 · 소켓 · 구현체 <span class="hl">— 콘센트 비유</span></h1>
+    <div class="body">
+      <svg viewBox="0 0 1000 200" style="max-height:210px">
+        <defs><marker id="cab" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#ffd700"/></marker></defs>
+        <!-- wall = apiserver -->
+        <rect x="20" y="20" width="430" height="160" rx="12" fill="rgba(0,212,255,.06)" stroke="#26314f" stroke-width="1.5"/>
+        <text class="svgtext" x="235" y="44" fill="#7fdbff" font-size="14" text-anchor="middle">벽 = kube-apiserver</text>
+        <!-- socket -->
+        <rect x="250" y="70" width="120" height="92" rx="10" fill="#0f3460" stroke="#00d4ff" stroke-width="2.5"/>
+        <circle cx="290" cy="110" r="9" fill="#11193a" stroke="#00d4ff"/><circle cx="330" cy="110" r="9" fill="#11193a" stroke="#00d4ff"/>
+        <rect x="300" y="128" width="10" height="20" rx="3" fill="#11193a" stroke="#00d4ff"/>
+        <text class="svgtext" x="310" y="178" fill="#00d4ff" font-size="13" text-anchor="middle" font-weight="700">Aggregation Layer (소켓)</text>
+        <!-- plug -->
+        <rect x="640" y="78" width="110" height="76" rx="9" fill="#16203c" stroke="#ffd700" stroke-width="2.5"/>
+        <line x1="600" y1="100" x2="640" y2="100" stroke="#ffd700" stroke-width="4"/>
+        <line x1="600" y1="132" x2="640" y2="132" stroke="#ffd700" stroke-width="4"/>
+        <path d="M750 116 C 560 116, 520 116, 372 116" fill="none" stroke="#ffd700" stroke-width="2.5" stroke-dasharray="2 0" marker-end="url(#cab)"/>
+        <text class="svgtext" x="695" y="172" fill="#ffd700" font-size="13" text-anchor="middle" font-weight="700">metrics-server (플러그)</text>
+        <text class="svgtext" x="870" y="90" fill="#e6ecf5" font-size="13" text-anchor="middle">애드온</text>
+        <text class="svgtext" x="870" y="110" fill="#9fb0cc" font-size="12" text-anchor="middle">직접 설치</text>
+        <text class="svgtext" x="510" y="58" fill="#9fb0cc" font-size="12" text-anchor="middle">규격 = metrics.k8s.io</text>
+      </svg>
+      <ul class="small" style="margin-top:8px">
+        <li>Aggregation Layer ✅ apiserver 내장 / metrics-server ❌ <strong>애드온</strong> (안 깔면 <code>top</code>·HPA 모두 <code>&lt;unknown&gt;</code>)</li>
+        <li><strong>HPA가 core인 이유</strong>: HPA는 <strong>인터페이스</strong>에 의존하지 구현(metrics-server)에 의존하지 않는다.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ 13 계산식 ============ -->
+  <section class="slide" data-title="HPA 계산식">
+    <span class="kicker"><span class="dot"></span>HPA · 공식</span>
+    <h1>HPA <span class="hl">계산식</span></h1>
+    <div class="body">
+      <div class="card cyan" style="text-align:center;padding:24px">
+        <code style="font-size:22px;background:none;color:#fff">desiredReplicas = ceil( currentReplicas × ( <span style="color:#00ff88">currentMetric</span> / <span style="color:#ffd700">desiredMetric</span> ) )</code>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:center;gap:18px;margin:18px 0">
+        <div class="card" style="padding:12px 18px;text-align:center">현재 <b style="color:#00d4ff;font-size:26px">3</b><br><span class="tiny mut">replica</span></div>
+        <span style="font-size:22px">×</span>
+        <div class="card" style="padding:12px 18px;text-align:center"><b style="color:#00ff88;font-size:22px">90%</b> / <b style="color:#ffd700;font-size:22px">50%</b><br><span class="tiny mut">현재/목표 CPU</span></div>
+        <span style="font-size:22px">=</span>
+        <div class="card" style="padding:12px 18px;text-align:center">ceil(5.4) = <b style="color:#ffd700;font-size:26px">6</b><br><span class="tiny mut">desired</span></div>
+      </div>
+      <ul class="small">
+        <li>CPU 사용률은 노드가 아니라 컨테이너 <strong>requests 대비 %</strong> → <strong>requests 없으면 계산 불가</strong> (ch14 직결).</li>
+        <li><strong>tolerance 10%</strong>: 비율 0.9~1.1이면 변동 없음. Not-Ready·missing metric은 보수 보정 → "공식대로면 6인데 5"도 정상.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ 14 메트릭 3종 ============ -->
+  <section class="slide" data-title="메트릭 종류 3가지">
+    <span class="kicker"><span class="dot"></span>HPA · 메트릭</span>
+    <h1>메트릭 종류 <span class="hl">3가지</span></h1>
+    <div class="body">
+      <div class="grid g3">
+        <div class="card"><span class="ic">🧮</span><h3 style="font-size:18px"><code>Resource</code></h3>
+          <p class="tiny mut">metrics.k8s.io (metrics-server)</p><p>CPU, 메모리</p></div>
+        <div class="card"><span class="ic">📈</span><h3 style="font-size:18px"><code>Pods</code> / <code>Object</code></h3>
+          <p class="tiny mut">custom.metrics.k8s.io (Prom Adapter)</p><p>초당 요청수, 큐 길이</p></div>
+        <div class="card"><span class="ic">☁️</span><h3 style="font-size:18px"><code>External</code></h3>
+          <p class="tiny mut">external.metrics.k8s.io (KEDA)</p><p>SQS·PubSub 메시지 수</p></div>
+      </div>
+      <blockquote style="margin-top:18px">여러 메트릭 지정 시 <strong>각각 계산해 가장 큰 replica 채택</strong>(안전한 쪽). 비즈니스 신호(QPS·큐·p99)로 스케일하면 CPU보다 정확.</blockquote>
+    </div>
+  </section>
+
+  <!-- ============ 15 behavior ============ -->
+  <section class="slide" data-title="flapping 방지 behavior">
+    <span class="kicker"><span class="dot"></span>HPA · 안정화</span>
+    <h1>스케일링 안정화 — <span class="hl">flapping 방지</span></h1>
+    <div class="body">
+      <div class="grid g2" style="align-items:start">
+        <pre><code>spec:
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # 5분 보수
+      policies: [{type: Percent, value: 50,
+                  periodSeconds: 60}]
+    scaleUp:
+      stabilizationWindowSeconds: 0    # 즉시
+      policies: [{type: Pods, value: 4,
+                  periodSeconds: 60}]</code></pre>
+        <table class="kt">
+          <tr><th>키</th><th>역할</th></tr>
+          <tr><td><code>behavior</code></td><td><code>scaleUp</code>·<code>scaleDown</code>을 <strong>방향별로 따로</strong> 튜닝 (autoscaling/v2)</td></tr>
+          <tr><td><code>stabilization-<br>WindowSeconds</code></td><td>이 시간 동안 추천값을 모아 <strong>↓는 최댓값·↑는 최솟값</strong> 채택 → 순간 변동 무시. ↓<strong>300</strong>(5분)·↑<strong>0</strong>(즉시)</td></tr>
+          <tr><td><code>policies</code></td><td>변경 <strong>속도 상한</strong> 규칙 목록</td></tr>
+          <tr><td><code>type</code></td><td><code>Pods</code>=절대 개수 / <code>Percent</code>=현재 replica 대비 %</td></tr>
+          <tr><td><code>value</code></td><td>상한 크기 (<code>Percent 50</code>=한 번에 절반까지)</td></tr>
+          <tr><td><code>periodSeconds</code></td><td>그 상한을 <strong>"~초당"</strong>으로 적용하는 시간창 (여기선 60초)</td></tr>
+        </table>
+      </div>
+      <blockquote class="small" style="margin-top:14px"><strong>예시 해석</strong> — 축소: 5분 보수적으로 보다가 줄여도 <strong>60초당 현재의 50%까지만</strong>. 확대: 즉시 반응하되 <strong>60초당 최대 4개까지만</strong>. 정책이 여러 개면 <code>selectPolicy</code>(기본 <code>Max</code>=가장 큰 변화 허용)로 택1, <code>Disabled</code>면 그 방향을 아예 잠금.</blockquote>
+    </div>
+  </section>
+
+  <!-- ============ 16 SECTION VPA ============ -->
+  <section class="slide lead" data-title="VPA">
+    <div class="body">
+      <div class="big" style="font-size:64px">VPA</div>
+      <div class="sub">Vertical Pod Autoscaler</div>
+      <div class="desc">HPA가 <strong>개수</strong>를 늘린다면,<br>VPA는 Pod 하나의 <strong>requests/limits</strong>를 실사용량에 맞춰 자동 조정</div>
+    </div>
+  </section>
+
+  <!-- ============ 17 VPA 3컴포넌트 ============ -->
+  <section class="slide" data-title="VPA 3 컴포넌트">
+    <span class="kicker"><span class="dot"></span>VPA</span>
+    <h1>코어 빌트인 아님 + <span class="hl">3 컴포넌트</span></h1>
+    <div class="body">
+      <blockquote style="margin-bottom:16px"><strong>VPA는 코어 내장이 아니다.</strong> <code>kubernetes/autoscaler</code> 레포의 별도 애드온(직접 설치). API 그룹 <code>autoscaling.k8s.io</code>.</blockquote>
+      <div class="grid g3">
+        <div class="card"><span class="ic">🔍</span><h3 style="font-size:18px">Recommender</h3><p class="small">사용량 분석 → 적정 requests 추천값 계산</p></div>
+        <div class="card"><span class="ic">♻️</span><h3 style="font-size:18px">Updater</h3><p class="small">추천값과 동떨어진 기존 Pod 축출(재생성 유도)</p></div>
+        <div class="card"><span class="ic">💉</span><h3 style="font-size:18px">Admission Controller</h3><p class="small">새 Pod에 추천값 주입(mutating webhook)</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 18 updateMode ============ -->
+  <section class="slide" data-title="updateMode 4가지">
+    <span class="kicker"><span class="dot"></span>VPA · updateMode</span>
+    <h1>updateMode <span class="hl">4가지</span></h1>
+    <div class="body">
+      <table>
+        <tr><th>모드</th><th>동작</th><th>용도</th></tr>
+        <tr><td><code>Off</code></td><td><strong>추천만</strong>, 변경 X</td><td>가장 안전 / HPA와 병행</td></tr>
+        <tr><td><code>Initial</code></td><td>생성 시점에만 주입</td><td>재시작 부담 최소</td></tr>
+        <tr><td><code>Recreate</code></td><td>Pod 죽이고 새 값으로 재생성</td><td>무중단 아님</td></tr>
+        <tr><td><code>Auto</code></td><td>현재 Recreate와 동일</td><td>(향후 In-place resize 결합)</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 19 HPA×VPA 충돌 ============ -->
+  <section class="slide" data-title="HPA×VPA 충돌">
+    <span class="kicker"><span class="dot"></span>가장 큰 함정</span>
+    <h1>HPA와 VPA의 <span class="hl">충돌</span></h1>
+    <div class="body">
+      <div class="grid g2" style="grid-template-columns:1.1fr .9fr;align-items:center">
+        <svg viewBox="0 0 380 180">
+          <text class="svgtext" x="190" y="22" fill="#fff" font-size="15" text-anchor="middle" font-weight="700">같은 CPU 신호 →</text>
+          <rect x="20" y="45" width="160" height="44" rx="9" fill="rgba(0,212,255,.1)" stroke="#00d4ff" stroke-width="1.8"/>
+          <text class="svgtext" x="100" y="72" fill="#00d4ff" font-size="14" text-anchor="middle">HPA: replica ↑</text>
+          <rect x="200" y="45" width="160" height="44" rx="9" fill="rgba(255,215,0,.1)" stroke="#ffd700" stroke-width="1.8"/>
+          <text class="svgtext" x="280" y="72" fill="#ffd700" font-size="14" text-anchor="middle">VPA: requests ↑</text>
+          <path d="M40 150 Q 90 100 140 150 T 240 150 T 340 150" fill="none" stroke="#ff6b6b" stroke-width="2.5"/>
+          <text class="svgtext" x="190" y="138" fill="#ff9b9b" font-size="14" text-anchor="middle" font-weight="700">반대로 반응 → 진동</text>
+        </svg>
+        <div>
+          <p class="small" style="margin-bottom:12px"><strong>같은 자원(CPU/메모리)에 HPA·VPA 동시 사용 금지.</strong></p>
+          <div class="card cyan"><h3 style="font-size:17px">✅ 허용 조합</h3>
+            <ul class="tiny"><li>HPA(CPU) + VPA <code>Off</code>(추천만)</li><li>HPA(커스텀 QPS) + VPA(CPU·메모리)</li></ul></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 20 In-place ============ -->
+  <section class="slide" data-title="In-place Resize 미래">
+    <span class="kicker"><span class="dot"></span>VPA · 미래</span>
+    <h1>무중단 수직 스케일링의 <span class="hl">미래</span></h1>
+    <div class="body">
+      <div class="grid g2" style="align-items:center">
+        <div>
+          <ul class="small"><li>전통적 VPA는 requests 변경 = <strong>Pod 재시작</strong>.</li>
+          <li>코어 <strong>In-place Pod Resize</strong>(<code>resizePolicy</code>, 1.27 alpha → 1.33 beta)와 결합 시 <strong>재시작 없이</strong> 조정.</li></ul>
+        </div>
+        <blockquote>코어에 들어온 건 VPA가 아니라,<br><strong>자원을 재시작 없이 바꾸는 In-place Resize</strong>.</blockquote>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 21 SECTION 3 ============ -->
+  <section class="slide lead" data-title="섹션 3: Node 단위">
+    <div class="body">
+      <div class="secnum">03</div>
+      <div class="big" style="font-size:60px">Node 단위 스케일링</div>
+      <div class="desc">Pod을 늘렸는데(HPA) <strong>들어갈 노드가 없으면?</strong><br>노드 자체를 늘리는 레이어</div>
+    </div>
+  </section>
+
+  <!-- ============ 22 CA ============ -->
+  <section class="slide" data-title="Cluster Autoscaler">
+    <span class="kicker"><span class="dot"></span>CA</span>
+    <h1>Cluster Autoscaler <span class="hl">(CA)</span></h1>
+    <div class="body">
+      <div class="grid g2" style="margin-bottom:14px">
+        <div class="card cyan"><h3 style="font-size:18px">⬆️ Scale up</h3><p class="small">Pod이 자원 부족으로 <strong>Pending</strong>(스케줄 실패) → 노드 그룹에 노드 추가.</p></div>
+        <div class="card"><h3 style="font-size:18px">⬇️ Scale down</h3><p class="small">활용률 낮고(기본 50%↓) Pod 재배치 가능 → drain 후 노드 제거.</p></div>
+      </div>
+      <pre style="margin-bottom:12px"><code>HPA가 replica↑ → Pod이 Pending(노드 부족) → CA가 노드 추가 → Pod 스케줄됨</code></pre>
+      <p class="small"><strong>축소를 막는 요소</strong>(비용 누수 단골): 빡빡한 PodDisruptionBudget · local storage Pod · <code>safe-to-evict:false</code> · 시스템 Pod.</p>
+    </div>
+  </section>
+
+  <!-- ============ 22b PodDisruptionBudget ============ -->
+  <section class="slide" data-title="PodDisruptionBudget">
+    <span class="kicker"><span class="dot"></span>CA · 안전장치</span>
+    <h1>PodDisruptionBudget <span class="hl">(PDB)</span></h1>
+    <div class="body">
+      <blockquote style="margin-bottom:14px"><strong>"이 앱은 최소 몇 개는 항상 살아있어야 한다"</strong>를 선언 → CA/drain이 한꺼번에 너무 많은 Pod을 죽이지 못하게 막는 안전장치.</blockquote>
+      <div class="grid g2" style="align-items:start">
+        <div>
+          <h3 style="font-size:17px;margin-bottom:6px">자발적 중단만 보호</h3>
+          <div class="grid g2" style="gap:12px">
+            <div class="card cyan"><h3 style="font-size:15px">✅ 보호 (voluntary)</h3>
+              <ul class="tiny"><li><code>kubectl drain</code></li><li><strong>CA/Karpenter 노드 축소</strong></li><li>클러스터 업그레이드·롤링</li></ul></div>
+            <div class="card" style="border-color:rgba(255,107,107,.4)"><h3 style="font-size:15px;color:#ff9b9b">❌ 못 막음</h3>
+              <ul class="tiny"><li>노드 하드웨어 고장</li><li>커널 패닉 · OOM kill</li></ul></div>
+          </div>
+          <table class="kt" style="margin-top:12px">
+            <tr><th>키</th><th>의미</th></tr>
+            <tr><td><code>minAvailable</code></td><td>축출 후에도 <strong>최소 N개</strong> 보장 (절대수 또는 <code>50%</code>)</td></tr>
+            <tr><td><code>maxUnavailable</code></td><td>동시에 <strong>최대 N개</strong>까지만 죽임</td></tr>
+          </table>
+        </div>
+        <div>
+          <pre class="sm"><code>apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: kubia}
+spec:
+  minAvailable: 3        # 또는 maxUnavailable: 1
+  selector:
+    matchLabels: {app: kubia}</code></pre>
+          <pre class="sm" style="margin-top:8px"><code class="cm"># 책의 명령형 생성
+kubectl create pdb kubia \
+  --min-available=3 --selector=app=kubia
+kubectl get pdb   # ALLOWED DISRUPTIONS 확인</code></pre>
+          <div class="card" style="margin-top:10px;padding:11px 14px;border-color:rgba(255,107,107,.4)"><p class="tiny"><strong>⚠️ 함정:</strong> <code>minAvailable</code> = replica 수면 <strong>0개도 못 죽여</strong> 노드 축소가 영영 막힘(데드락) → 비용 누수. <code>maxUnavailable: 1</code>이 안전한 기본값.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 23 Karpenter vs CA ============ -->
+  <section class="slide" data-title="Karpenter vs CA">
+    <span class="kicker"><span class="dot"></span>대안</span>
+    <h1>Karpenter <span class="hl">vs Cluster Autoscaler</span></h1>
+    <div class="body">
+      <table>
+        <tr><th></th><th>Cluster Autoscaler</th><th>Karpenter</th></tr>
+        <tr><td>단위</td><td>미리 정의된 <strong>노드 그룹/ASG</strong> 내 +/-</td><td>그룹 없이 <strong>Pending Pod에 딱 맞는 인스턴스 즉석 선택</strong></td></tr>
+        <tr><td>속도</td><td>느림 (ASG 경유)</td><td><strong>빠름</strong> (직접 프로비저닝)</td></tr>
+        <tr><td>비용</td><td>그룹 단위 한계</td><td><strong>spot/타입 혼합 최적</strong></td></tr>
+        <tr><td>범위</td><td>모든 클라우드/온프렘</td><td>주로 AWS (확산 중)</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 24 왜 Karpenter 빠른가 ============ -->
+  <section class="slide" data-title="왜 Karpenter가 빠른가">
+    <span class="kicker"><span class="dot"></span>DEEP DIVE</span>
+    <h1>왜 Karpenter가 <span class="hl">더 빠른가</span> — 근본 2가지</h1>
+    <div class="body">
+      <svg viewBox="0 0 1000 150" style="max-height:160px;margin-bottom:6px">
+        <defs><marker id="aw" markerWidth="10" markerHeight="10" refX="6.5" refY="3.5" orient="auto"><path d="M0,0 L8,3.5 L0,7 Z" fill="#7fdbff"/></marker></defs>
+        <!-- CA row -->
+        <text class="svgtext" x="20" y="40" fill="#ff9b9b" font-size="14" font-weight="700">CA</text>
+        <rect x="60" y="20" width="110" height="40" rx="8" fill="#16203c" stroke="#3a4670"/><text class="svgtext" x="115" y="45" fill="#e6ecf5" font-size="13" text-anchor="middle">CA</text>
+        <rect x="230" y="20" width="110" height="40" rx="8" fill="#16203c" stroke="#3a4670"/><text class="svgtext" x="285" y="45" fill="#e6ecf5" font-size="13" text-anchor="middle">ASG desired+1</text>
+        <rect x="400" y="20" width="110" height="40" rx="8" fill="#16203c" stroke="#3a4670"/><text class="svgtext" x="455" y="45" fill="#e6ecf5" font-size="13" text-anchor="middle">EC2 기동</text>
+        <line x1="170" y1="40" x2="227" y2="40" stroke="#7fdbff" stroke-width="2" marker-end="url(#aw)"/>
+        <line x1="340" y1="40" x2="397" y2="40" stroke="#7fdbff" stroke-width="2" marker-end="url(#aw)"/>
+        <text class="svgtext" x="560" y="45" fill="#ff9b9b" font-size="13">제어 루프 2개 → 느림</text>
+        <!-- Karpenter row -->
+        <text class="svgtext" x="20" y="115" fill="#00ff88" font-size="14" font-weight="700">Kar</text>
+        <rect x="60" y="95" width="130" height="40" rx="8" fill="rgba(0,255,136,.08)" stroke="#00ff88"/><text class="svgtext" x="125" y="120" fill="#00ff88" font-size="13" text-anchor="middle">Karpenter</text>
+        <rect x="250" y="95" width="170" height="40" rx="8" fill="rgba(0,255,136,.08)" stroke="#00ff88"/><text class="svgtext" x="335" y="120" fill="#00ff88" font-size="13" text-anchor="middle">EC2 CreateFleet (직접)</text>
+        <line x1="190" y1="115" x2="247" y2="115" stroke="#00ff88" stroke-width="2" marker-end="url(#aw)"/>
+        <text class="svgtext" x="470" y="120" fill="#00ff88" font-size="13">루프 1개 → 빠름</text>
+      </svg>
+      <div class="grid g2">
+        <div class="card"><h3 style="font-size:17px">① 프로비저닝 간접성</h3><p class="tiny">CA는 ASG desired만 +1 → 실제 기동은 ASG에 <strong>위임</strong>(루프 2개). Karpenter는 EC2 API <strong>직접</strong> 호출.</p></div>
+        <div class="card"><h3 style="font-size:17px">② 노드그룹 = 고정 템플릿</h3><p class="tiny">CA는 그룹 중 <strong>고르기</strong>만 → 못 맞으면 재시도. Karpenter는 requests로 <strong>최적 타입 즉석 계산</strong>.</p></div>
+      </div>
+      <blockquote class="tiny" style="margin-top:12px">CA는 <strong>이식성</strong>(모든 클라우드) 위해 노드그룹 추상화를 거치느라 2단 루프+템플릿을 떠안음. <strong>속도(이득) = 이식성 상실(비용)</strong>, 같은 원인의 양면.</blockquote>
+    </div>
+  </section>
+
+  <!-- ===== Karpenter 도입 ===== -->
+  <section class="slide" data-title="Karpenter 도입">
+    <span class="kicker"><span class="dot"></span>PRACTICE · 도입</span>
+    <h1>Karpenter <span class="hl">도입하기</span> (EKS)</h1>
+    <div class="body">
+      <div class="grid g2" style="align-items:start;grid-template-columns:.92fr 1.08fr">
+        <div>
+          <h3 style="font-size:17px;margin-bottom:6px">① 컨트롤러 설치 (Helm)</h3>
+          <pre class="sm"><code># IAM 역할·노드역할·태그는 eksctl/CFN로 선행
+helm upgrade --install karpenter \
+  oci://public.ecr.aws/karpenter/karpenter \
+  --version 1.0.6 -n kube-system \
+  --set settings.clusterName=$CLUSTER \
+  --set settings.interruptionQueue=$CLUSTER</code></pre>
+          <p class="tiny mut" style="margin-top:8px">컨트롤러 자신은 관리형 노드그룹/Fargate에 1~2개만.</p>
+        </div>
+        <div>
+          <h3 style="font-size:17px;margin-bottom:6px">② 무엇을·어떻게 띄울지 선언</h3>
+          <pre class="sm"><code>apiVersion: karpenter.sh/v1
+kind: NodePool                 # 무엇을: 제약·한도
+metadata: {name: default}
+spec:
+  template:
+    spec:
+      requirements:
+      - {key: karpenter.sh/capacity-type, operator: In,
+         values: ["spot","on-demand"]}
+      nodeClassRef: {group: karpenter.k8s.aws,
+        kind: EC2NodeClass, name: default}
+  limits: {cpu: "1000"}              # 폭주 상한
+  disruption: {consolidationPolicy: WhenEmptyOrUnderutilized}
+---
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass             # 어떻게: AMI·서브넷·역할
+metadata: {name: default}
+spec:
+  role: KarpenterNodeRole-$CLUSTER
+  amiSelectorTerms: [{alias: al2023@latest}]
+  subnetSelectorTerms: [{tags: {karpenter.sh/discovery: $CLUSTER}}]
+  securityGroupSelectorTerms: [{tags: {karpenter.sh/discovery: $CLUSTER}}]</code></pre>
+        </div>
+      </div>
+      <blockquote class="tiny" style="margin-top:10px"><strong>NodePool</strong>=어떤 노드를 허용할지(타입·spot·한도), <strong>EC2NodeClass</strong>=그 노드를 AWS에서 어떻게 만들지(AMI·서브넷·IAM). <strong>노드그룹을 미리 안 만든다</strong> — 제약만 주면 Karpenter가 즉석에서 고름.</blockquote>
+    </div>
+  </section>
+
+  <!-- ===== Karpenter 실습: Pod scale ===== -->
+  <section class="slide" data-title="Pod 늘리고 줄이기">
+    <span class="kicker"><span class="dot"></span>DEMO · scale</span>
+    <h1>Pod 늘리고 줄이기 <span class="hl">→ 노드가 따라온다</span></h1>
+    <div class="body">
+      <div class="grid g2" style="align-items:start">
+        <div>
+          <h3 style="font-size:17px;margin-bottom:6px">① 조작 (이게 트리거)</h3>
+          <pre class="sm"><code># 데모 워크로드 (pause, requests=1코어)
+kubectl create deployment inflate \
+  --image=registry.k8s.io/pause:3.9
+kubectl set resources deploy/inflate --requests=cpu=1
+
+# ▲ 늘리기 → Pending → Karpenter가 노드 생성
+kubectl scale deploy/inflate --replicas=20
+
+# ▼ 줄이기 → 빈/저활용 노드 자동 정리
+kubectl scale deploy/inflate --replicas=0</code></pre>
+        </div>
+        <div>
+          <h3 style="font-size:17px;margin-bottom:6px">② 관찰</h3>
+          <pre class="sm"><code>kubectl get pods -w        # Pending→Running
+kubectl get nodeclaims     # Karpenter 노드요청
+kubectl get nodes -w       # 노드 증감
+eks-node-viewer            # 비용·빈패킹 실시간
+kubectl logs -f -n kube-system \
+  -l app.kubernetes.io/name=karpenter</code></pre>
+          <div class="card cyan" style="margin-top:10px;padding:11px 14px"><p class="tiny"><strong>왜 requests가 필수?</strong> 스케줄러가 자리를 requests로 계산 → <strong>Pending 판정이 곧 Karpenter 입력</strong>. requests 없으면 못 늘림 (슬라이드 13 연결).</p></div>
+        </div>
+      </div>
+      <blockquote class="tiny" style="margin-top:10px"><code>kubectl scale</code>로 <strong>replica를 바꾸는 게 트리거</strong>. 실제 운영에선 이 replica를 <strong>HPA가 자동으로</strong> 올리고(부하↑), Karpenter가 노드를 받쳐줌 — HPA↔Karpenter 협력(다음 장 "세 층위 흐름").</blockquote>
+    </div>
+  </section>
+
+  <!-- ============ 3-layer flow ============ -->
+  <section class="slide" data-title="세 층위 협력 흐름">
+    <span class="kicker"><span class="dot"></span>전체 그림</span>
+    <h1>세 층위의 <span class="hl">협력 흐름</span></h1>
+    <div class="body">
+      <svg viewBox="0 0 1000 240" style="max-height:280px">
+        <defs><marker id="af" markerWidth="11" markerHeight="11" refX="7" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#ffd700"/></marker></defs>
+        <g class="svgtext" font-size="15" text-anchor="middle">
+          <rect x="60" y="20" width="160" height="46" rx="10" fill="rgba(255,107,107,.1)" stroke="#ff6b6b"/><text x="140" y="48" fill="#ff9b9b" font-weight="700">부하 ↑</text>
+          <rect x="290" y="20" width="200" height="46" rx="10" fill="rgba(0,212,255,.1)" stroke="#00d4ff"/><text x="390" y="48" fill="#00d4ff" font-weight="700">HPA: Pod 개수 ↑</text>
+          <rect x="560" y="20" width="200" height="46" rx="10" fill="#16203c" stroke="#3a4670"/><text x="660" y="48" fill="#e6ecf5">Pod이 Pending</text>
+          <rect x="430" y="110" width="280" height="50" rx="10" fill="rgba(255,215,0,.1)" stroke="#ffd700"/><text x="570" y="140" fill="#ffd700" font-weight="700">CA / Karpenter: 노드 ↑</text>
+          <rect x="430" y="186" width="280" height="44" rx="10" fill="rgba(0,255,136,.08)" stroke="#00ff88"/><text x="570" y="213" fill="#00ff88" font-weight="700">Pod 스케줄 성공 ✓</text>
+          <rect x="60" y="120" width="300" height="44" rx="10" fill="#16203c" stroke="#3a4670"/><text x="210" y="147" fill="#9fb0cc" font-size="13">VPA: Pod당 requests를 옆에서 보정</text>
+        </g>
+        <line x1="220" y1="43" x2="287" y2="43" stroke="#ffd700" stroke-width="2.5" marker-end="url(#af)"/>
+        <line x1="490" y1="43" x2="557" y2="43" stroke="#ffd700" stroke-width="2.5" marker-end="url(#af)"/>
+        <line x1="660" y1="66" x2="620" y2="107" stroke="#ffd700" stroke-width="2.5" marker-end="url(#af)"/>
+        <line x1="570" y1="160" x2="570" y2="183" stroke="#ffd700" stroke-width="2.5" marker-end="url(#af)"/>
+      </svg>
+      <blockquote style="margin-top:8px"><strong>HPA ↔ CA는 협력</strong>(Pod↑→Pending→노드↑). <strong>HPA ↔ VPA(동일 자원)는 충돌</strong>.</blockquote>
+    </div>
+  </section>
+
+  <!-- ============ 27 책 vs 현실 ============ -->
+  <section class="slide" data-title="책 vs 현실">
+    <span class="kicker"><span class="dot"></span>마무리</span>
+    <h1>책 <span class="hl">vs 현실</span></h1>
+    <div class="body">
+      <table class="small">
+        <tr><th>책(2017, 1판)</th><th>현재(2024+)</th></tr>
+        <tr><td>메트릭 = <strong>Heapster</strong></td><td><strong>폐기(2019)</strong>. metrics-server + Prometheus Adapter</td></tr>
+        <tr><td>HPA <code>v1</code>(CPU만)</td><td><strong><code>v2</code></strong> — 메모리·커스텀·External + <code>behavior</code></td></tr>
+        <tr><td>앱 <strong>idling</strong> "계획 중"</td><td><strong>코어에 끝내 안 들어옴</strong>. 진짜 idling은 Knative/KEDA</td></tr>
+        <tr><td>VPA "계획 중"</td><td><strong>애드온으로 실현</strong>(코어 X), In-place Resize와 결합 중</td></tr>
+        <tr><td>scale-to-zero 불가</td><td><strong>KEDA</strong>(이벤트 기반 0↔N, 60+ scaler)</td></tr>
+        <tr><td>Cluster Autoscaler만</td><td><strong>Karpenter</strong> 대안 부상</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 28 KEDA ============ -->
+  <section class="slide" data-title="KEDA scale-to-zero">
+    <span class="kicker"><span class="dot"></span>현실 · KEDA</span>
+    <h1>KEDA — 이벤트 기반 + <span class="hl">scale-to-zero</span></h1>
+    <div class="body">
+      <div class="grid g2" style="align-items:center">
+        <pre><code>apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+spec:
+  scaleTargetRef: { name: consumer }
+  minReplicaCount: 0   # ← 0까지
+  maxReplicaCount: 50
+  triggers:
+  - type: kafka
+    metadata:
+      topic: orders
+      lagThreshold: "100"</code></pre>
+        <div>
+          <p class="small" style="margin-bottom:12px">기본 HPA는 <code>minReplicas:1</code> 이하로 못 내려간다. KEDA는 이벤트 없으면 <strong>0으로 축소</strong>, 오면 깨워 이후 HPA에 위임.</p>
+          <div class="pillrow">
+            <span class="pill">Kafka lag</span><span class="pill">SQS depth</span><span class="pill">RabbitMQ</span><span class="pill">cron</span><span class="pill gold">60+ scaler</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 29 Takeaways ============ -->
+  <section class="slide" data-title="Key Takeaways">
+    <span class="kicker"><span class="dot"></span>요약</span>
+    <h1>Key <span class="hl">Takeaways</span></h1>
+    <div class="body">
+      <ul>
+        <li><strong>HPA=가로(개수), VPA=세로(자원), CA=노드</strong> — 세 단어로 구조가 잡힌다.</li>
+        <li>HPA 공식 <code>ceil(replica × 현재/목표)</code>, CPU는 <strong>requests 대비</strong> → requests 필수(ch14 직결).</li>
+        <li><strong>HPA ↔ CA 협력, HPA ↔ VPA(동일 자원) 충돌</strong> — VPA는 추천(Off) 모드로 병행.</li>
+        <li>metrics-server는 <strong>애드온</strong> — 안 깔면 <code>top</code>·HPA 모두 <code>&lt;unknown&gt;</code>.</li>
+        <li>flapping은 <code>behavior</code>로, scale-to-zero는 <strong>KEDA</strong>로, 노드는 <strong>CA/Karpenter</strong>로.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ 30 Q&A ============ -->
+  <section class="slide lead" data-title="Q&A">
+    <div class="body">
+      <div class="big">Q &amp; A</div>
+      <div class="desc">HPA · VPA · Cluster Autoscaler · Karpenter · KEDA</div>
+      <div class="tag">감사합니다 🙌</div>
+    </div>
+  </section>
+
+  </div><!-- /stage -->
+</div><!-- /stage-wrap -->
+
+<div class="edge l" id="edgeL"></div>
+<div class="edge r" id="edgeR"></div>
+
+<nav class="nav">
+  <span class="title" id="navTitle"></span>
+  <button id="prev" aria-label="이전">‹</button>
+  <span class="counter"><b id="cur">1</b> / <span id="total">30</span></span>
+  <button id="next" aria-label="다음">›</button>
+</nav>
+<div class="hint">← → · Space 이동 · F 전체화면</div>
+
+<script>
+(function(){
+  var stage=document.getElementById('stage');
+  var slides=Array.prototype.slice.call(stage.querySelectorAll('.slide'));
+  var i=0, N=slides.length;
+  var curEl=document.getElementById('cur'), totalEl=document.getElementById('total');
+  var prevB=document.getElementById('prev'), nextB=document.getElementById('next');
+  var prog=document.getElementById('progress'), title=document.getElementById('navTitle');
+  totalEl.textContent=N;
+
+  function fit(){
+    var s=Math.min(window.innerWidth/1280, window.innerHeight/720);
+    stage.style.transform='scale('+s+')';
+  }
+  function show(n){
+    i=Math.max(0,Math.min(N-1,n));
+    slides.forEach(function(sl,k){ sl.classList.toggle('active',k===i); });
+    curEl.textContent=i+1;
+    prog.style.width=((i)/(N-1)*100)+'%';
+    prevB.disabled=(i===0); nextB.disabled=(i===N-1);
+    title.textContent=slides[i].getAttribute('data-title')||'';
+    if(location.hash!=='#'+(i+1)) history.replaceState(null,'','#'+(i+1));
+  }
+  function next(){ show(i+1); } function prev(){ show(i-1); }
+
+  nextB.onclick=next; prevB.onclick=prev;
+  document.getElementById('edgeR').onclick=next;
+  document.getElementById('edgeL').onclick=prev;
+
+  document.addEventListener('keydown',function(e){
+    if(e.key==='ArrowRight'||e.key==='PageDown'||e.key===' '){e.preventDefault();next();}
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();prev();}
+    else if(e.key==='Home'){show(0);} else if(e.key==='End'){show(N-1);}
+    else if(e.key==='f'||e.key==='F'){ if(!document.fullscreenElement){document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen();} else {document.exitFullscreen&&document.exitFullscreen();} }
+  });
+  window.addEventListener('resize',fit);
+  window.addEventListener('hashchange',function(){
+    var h=parseInt((location.hash||'#1').slice(1),10);
+    if(!isNaN(h)&&h-1!==i) show(h-1);
+  });
+  fit();
+  var start=parseInt((location.hash||'#1').slice(1),10); show(isNaN(start)?0:start-1);
+})();
+</script>
+</body>
+</html>
