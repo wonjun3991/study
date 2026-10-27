@@ -1,0 +1,12 @@
+# Observability 실습 클러스터: control-plane 1 + worker 2
+# worker를 2대 두는 이유: DaemonSet(OTel Collector agent, node-exporter)이 노드마다 하나씩 뜨는 구조를 보기 위함
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: observability
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.36.1
+  - role: worker
+    image: kindest/node:v1.36.1
+  - role: worker
+    image: kindest/node:v1.36.1

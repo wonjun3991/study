@@ -1,0 +1,118 @@
+# kube-prometheus-stack: Prometheus Operator + Prometheus + Alertmanager + Grafana
+#                        + node-exporter + kube-state-metrics
+# 역할: Metric 저장(TSDB)·쿼리(PromQL)·알람 + 전체 UI(Grafana)
+
+# Grafana 서비스 이름을 짧게 (kps-grafana → grafana)
+grafana:
+  fullnameOverride: grafana
+  adminPassword: admin          # 로컬 실습 전용
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 384Mi }
+  sidecar:
+    datasources:
+      # Prometheus 데이터소스에서 exemplar(trace_id) 클릭 → Tempo로 이동
+      exemplarTraceIdDestinations:
+        datasourceUid: tempo
+        traceIdLabelName: trace_id
+        urlDisplayLabel: View trace
+  # Loki · Tempo 데이터소스 + 신호 간 연결(correlation) 설정
+  # Grafana provisioning 파일에서는 $가 환경변수 치환이므로 $$로 이스케이프한다
+  additionalDataSources:
+    - name: Loki
+      uid: loki
+      type: loki
+      url: http://loki.observability.svc:3100
+      access: proxy
+      jsonData:
+        # log → trace: structured metadata의 trace_id를 Tempo 링크로
+        derivedFields:
+          - name: TraceID
+            matcherType: label
+            matcherRegex: trace_id
+            datasourceUid: tempo
+            url: "$${__value.raw}"
+            urlDisplayLabel: View trace
+    - name: Tempo
+      uid: tempo
+      type: tempo
+      url: http://tempo.observability.svc:3200
+      access: proxy
+      jsonData:
+        # trace → log: 같은 trace_id를 가진 로그 조회
+        tracesToLogsV2:
+          datasourceUid: loki
+          spanStartTimeShift: "-5m"
+          spanEndTimeShift: "5m"
+          filterByTraceID: true
+          tags:
+            - key: service.name
+              value: service_name
+        # trace → metric: 해당 서비스의 RED 지표
+        tracesToMetrics:
+          datasourceUid: prometheus
+          spanStartTimeShift: "-5m"
+          spanEndTimeShift: "5m"
+          tags:
+            - key: service.name
+              value: service
+        # Tempo metrics-generator가 만든 service graph 메트릭
+        serviceMap:
+          datasourceUid: prometheus
+        nodeGraph:
+          enabled: true
+
+prometheus:
+  prometheusSpec:
+    retention: 2d
+    resources:
+      requests: { cpu: 100m, memory: 512Mi }
+      limits: { memory: 1536Mi }
+
+    # Helm release label이 없는 ServiceMonitor/PodMonitor/Rule도 모두 수집 대상으로
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+
+    # Push 수신 경로 2가지
+    enableOTLPReceiver: true          # /api/v1/otlp/v1/metrics  ← OTel Collector gateway
+    enableRemoteWriteReceiver: true   # /api/v1/write            ← Tempo metrics-generator
+
+    # exemplar(metric 샘플에 붙은 trace_id) 저장
+    enableFeatures:
+      - exemplar-storage
+
+    # OTLP 변환 규칙: resource attribute 중 아래 항목은 metric label로 승격
+    # (나머지는 target_info 시계열에 들어감)
+    otlp:
+      keepIdentifyingResourceAttributes: true
+      promoteResourceAttributes:
+        - service.namespace
+        - deployment.environment.name
+        - k8s.namespace.name
+        - k8s.pod.name
+        - k8s.deployment.name
+        - k8s.node.name
+
+    # push 데이터는 도착 순서가 뒤섞일 수 있으므로 허용 구간을 둔다
+    tsdb:
+      outOfOrderTimeWindow: 30m
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { memory: 128Mi }
+
+# kind에서는 아래 컴포넌트가 127.0.0.1에만 metric을 노출해서 scrape가 실패(target down)한다.
+# 실습 노이즈를 줄이기 위해 수집 대상에서 제외.
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false

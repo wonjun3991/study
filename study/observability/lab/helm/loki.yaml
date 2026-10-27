@@ -1,0 +1,56 @@
+# Loki (SingleBinary 모드): Log 저장·쿼리(LogQL)
+# 실습용 단일 Pod + 로컬 파일시스템 저장. 운영에서는 SimpleScalable/Distributed + object storage(S3)
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false            # 멀티테넌시 끔 (X-Scope-OrgID 헤더 불필요)
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+  limits_config:
+    allow_structured_metadata: true   # OTLP의 trace_id 등을 structured metadata로 저장
+    volume_enabled: true
+    retention_period: 48h
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+  pattern_ingester:
+    enabled: true                     # Grafana Logs Drilldown의 패턴 탐지
+
+singleBinary:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 768Mi }
+  persistence:
+    size: 5Gi
+
+# SimpleScalable 컴포넌트는 사용하지 않음
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+
+# 실습 환경에서 불필요한 부가 컴포넌트 끔
+gateway:
+  enabled: false
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+lokiCanary:
+  enabled: false
+test:
+  enabled: false

@@ -1,0 +1,23 @@
+# Tempo (single binary): Trace 저장·쿼리(TraceQL)
+tempo:
+  reportingEnabled: false
+  retention: 24h
+  resources:
+    requests: { cpu: 50m, memory: 256Mi }
+    limits: { memory: 768Mi }
+
+  # metrics-generator: span으로부터 metric을 만들어 Prometheus로 remote_write
+  #   - span-metrics   → traces_spanmetrics_* (서비스·span별 RED)
+  #   - service-graphs → traces_service_graph_* (Grafana Service Map)
+  metricsGenerator:
+    enabled: true
+    remoteWriteUrl: http://kps-kube-prometheus-stack-prometheus.observability.svc:9090/api/v1/write
+  overrides:
+    defaults:
+      metrics_generator:
+        processors:
+          - service-graphs
+          - span-metrics
+
+  # receivers는 chart 기본값(OTLP 4317/4318 + Jaeger)을 그대로 쓴다.
+  # 이 chart는 jaeger receiver를 null로 지우면 Service 템플릿 렌더링이 실패한다.

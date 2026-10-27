@@ -1,0 +1,89 @@
+# OTel Collector — agent (DaemonSet, 노드마다 1개)
+# 역할: 같은 노드의 앱이 보낸 OTLP + 노드의 컨테이너 로그 파일을 받아
+#       k8s 메타데이터를 붙인 뒤 gateway로 넘긴다.
+mode: daemonset
+fullnameOverride: otel-agent
+
+image:
+  repository: otel/opentelemetry-collector-k8s
+
+presets:
+  # /var/log/pods/*/*/*.log 를 filelog receiver로 읽음 (컨테이너 stdout/stderr)
+  logsCollection:
+    enabled: true
+  # k8sattributes processor: Pod IP로 k8s.pod.name, k8s.deployment.name 등을 붙임
+  kubernetesAttributes:
+    enabled: true
+
+# 앱은 이 Service로 보낸다. daemonset 모드 Service는 internalTrafficPolicy: Local이라
+# 항상 "같은 노드의 agent"로 전달된다 (source IP가 Pod IP로 유지 → k8sattributes 매칭 가능)
+service:
+  enabled: true
+
+ports:
+  jaeger-compact: { enabled: false }
+  jaeger-thrift: { enabled: false }
+  jaeger-grpc: { enabled: false }
+  zipkin: { enabled: false }
+  metrics: { enabled: true }   # Collector 자체 metric(:8888) → ServiceMonitor로 Prometheus가 수집
+
+serviceMonitor:
+  enabled: true
+
+resources:
+  requests: { cpu: 50m, memory: 96Mi }
+  limits: { memory: 256Mi }
+
+config:
+  receivers:
+    jaeger: null
+    zipkin: null
+    prometheus: null
+
+  processors:
+    # stdout JSON 로그를 파싱해 OTel LogRecord 필드로 승격
+    #   - trace_id / span_id → LogRecord의 trace context (Loki에서 structured metadata가 됨)
+    #   - level → severity_text
+    transform/json_logs:
+      error_mode: ignore
+      log_statements:
+        - context: log
+          conditions:
+            - IsMatch(body, "^\\{")
+          statements:
+            - merge_maps(attributes, ParseJSON(body), "upsert")
+            - set(trace_id.string, attributes["trace_id"]) where attributes["trace_id"] != nil
+            - set(span_id.string, attributes["span_id"]) where attributes["span_id"] != nil
+            - set(severity_text, attributes["level"]) where attributes["level"] != nil
+            - delete_key(attributes, "trace_id")
+            - delete_key(attributes, "span_id")
+    # service.name이 없는 로그(filelog로 들어온 일반 Pod 로그)는 컨테이너 이름으로 채움
+    # → Loki의 service_name label, Tempo의 trace→log 연결에 사용
+    transform/service_name:
+      error_mode: ignore
+      log_statements:
+        - context: resource
+          statements:
+            - set(attributes["service.name"], attributes["k8s.container.name"]) where attributes["service.name"] == nil
+
+  exporters:
+    otlp/gateway:
+      endpoint: otel-gateway.observability.svc:4317
+      tls:
+        insecure: true
+
+  service:
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [otlp/gateway]
+      metrics:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [otlp/gateway]
+      logs:
+        # filelog receiver는 logsCollection preset이 자동으로 추가
+        receivers: [otlp]
+        processors: [memory_limiter, transform/json_logs, transform/service_name, batch]
+        exporters: [otlp/gateway]

@@ -1,0 +1,61 @@
+# OTel Collector — gateway (Deployment)
+# 역할: 모든 agent의 데이터를 한곳에 모아 신호별 백엔드로 라우팅
+#   metric → Prometheus (OTLP receiver)
+#   log    → Loki       (native OTLP endpoint)
+#   trace  → Tempo      (OTLP gRPC)
+# 샘플링(tail sampling), 민감정보 제거, 백엔드 교체는 이 계층에서 한다 (5주차)
+mode: deployment
+fullnameOverride: otel-gateway
+replicaCount: 1
+
+image:
+  repository: otel/opentelemetry-collector-k8s
+
+ports:
+  jaeger-compact: { enabled: false }
+  jaeger-thrift: { enabled: false }
+  jaeger-grpc: { enabled: false }
+  zipkin: { enabled: false }
+  metrics: { enabled: true }
+
+serviceMonitor:
+  enabled: true
+
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { memory: 384Mi }
+
+config:
+  receivers:
+    jaeger: null
+    zipkin: null
+    prometheus: null
+
+  exporters:
+    otlphttp/prometheus:
+      metrics_endpoint: http://kps-kube-prometheus-stack-prometheus.observability.svc:9090/api/v1/otlp/v1/metrics
+      tls:
+        insecure: true
+    otlphttp/loki:
+      logs_endpoint: http://loki.observability.svc:3100/otlp/v1/logs
+      tls:
+        insecure: true
+    otlp/tempo:
+      endpoint: tempo.observability.svc:4317
+      tls:
+        insecure: true
+
+  service:
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [otlp/tempo]
+      metrics:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [otlphttp/prometheus]
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [otlphttp/loki]
