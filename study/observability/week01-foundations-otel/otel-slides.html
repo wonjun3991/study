@@ -1,0 +1,944 @@
+<title>OTel 동작 원리 슬라이드</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: 한 화면 = 한 슬라이드. 상단 바(덱 이름·현재 장) / 슬라이드 / 하단 진행 바. 애니메이션 슬라이드는 캔버스 + 단계 목록 2단 */
+:root{
+  --bg:#f5f6f8; --surface:#ffffff; --surface2:#eef0f4; --fg:#161a22; --muted:#5d6475; --line:#d5d9e2;
+  --accent:#3554d1;
+  --trace:#6d28d9; --metric:#0e7490; --log:#b45309; --profile:#be185d; --baggage:#047857;
+  --ok:#15803d; --bad:#dc2626;
+  --sans:"IBM Plex Sans KR","Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f1218; --surface:#161b24; --surface2:#1d2330; --fg:#e7eaf1; --muted:#9aa3b5; --line:#2c3443;
+  --accent:#8aa2ff;
+  --trace:#a78bfa; --metric:#22d3ee; --log:#fbbf24; --profile:#f472b6; --baggage:#34d399;
+  --ok:#4ade80; --bad:#f87171; color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0f1218; --surface:#161b24; --surface2:#1d2330; --fg:#e7eaf1; --muted:#9aa3b5; --line:#2c3443;
+  --accent:#8aa2ff;
+  --trace:#a78bfa; --metric:#22d3ee; --log:#fbbf24; --profile:#f472b6; --baggage:#34d399;
+  --ok:#4ade80; --bad:#f87171; color-scheme:dark;
+}
+html,body{height:100%}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:16px;line-height:1.6;overflow:hidden}
+.deck{height:100%;display:grid;grid-template-rows:auto minmax(0,1fr) auto}
+.bar{display:flex;align-items:center;gap:16px;padding-block:10px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));border-bottom:1px solid var(--line);background:var(--surface);font-size:13px}
+.bar .name{font-weight:700;letter-spacing:.02em}
+.bar .chap{color:var(--muted);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar .count{font-family:var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.viewport{position:relative;overflow:hidden}
+.slide{position:absolute;inset:0;overflow-y:auto;padding-block:28px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.slide:not(.active){display:none}
+.slide.active{animation:in .35s ease-out}
+@keyframes in{from{opacity:.4;transform:translateY(8px)}to{opacity:1;transform:none}}
+.inner{max-width:1240px;min-height:100%;margin:0 auto;display:flex;flex-direction:column;justify-content:center;gap:18px}
+.eyebrow{font-family:var(--mono);font-size:12.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:500}
+h1,h2,h3{text-wrap:balance;margin:0;line-height:1.25}
+h1{font-size:clamp(34px,5vw,60px);font-weight:700;letter-spacing:-.01em}
+h2{font-size:clamp(24px,3vw,36px);font-weight:700}
+h3{font-size:17px;font-weight:600}
+p{margin:0}
+.lead{font-size:clamp(16px,1.6vw,19px);color:var(--muted);max-width:62ch}
+ul.pts{margin:0;padding-left:1.1em;display:grid;gap:8px;max-width:66ch}
+ul.pts li::marker{color:var(--accent)}
+code,.mono{font-family:var(--mono);font-size:.92em}
+code{background:var(--surface2);padding:1px 5px;border-radius:4px}
+.cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:28px;align-items:center}
+.cols>*{min-width:0}
+.fig{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;justify-content:center}
+.fig img{max-height:56vh;width:auto;object-fit:contain}
+.sig{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+.sig div{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px;display:grid;gap:6px;align-content:start}
+.sig b{display:flex;align-items:center;gap:8px;font-size:17px}
+.sig b::before{content:"";width:10px;height:10px;border-radius:2px;background:var(--c)}
+.sig span{font-size:14px;color:var(--muted)}
+.tw{overflow-x:auto;max-width:100%}
+table{border-collapse:collapse;font-size:14.5px;width:100%;min-width:520px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12.5px;letter-spacing:.04em;color:var(--muted);font-weight:600}
+td:first-child{font-weight:600;white-space:nowrap}
+.agenda{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;max-width:980px}
+.agenda a{display:flex;gap:10px;align-items:baseline;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--fg);text-decoration:none;font-size:14.5px}
+.agenda a:hover,.agenda a:focus-visible{border-color:var(--accent)}
+.agenda a span{font-family:var(--mono);font-size:12px;color:var(--accent)}
+.tp{font-family:var(--mono);font-size:clamp(15px,2.1vw,26px);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px;overflow-x:auto;white-space:nowrap}
+.tp .v{color:var(--muted)} .tp .t{color:var(--trace);font-weight:600} .tp .s{color:var(--accent);font-weight:600} .tp .f{color:var(--ok);font-weight:600}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:14px}
+.flow span{padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+.flow i{font-style:normal;color:var(--muted)}
+ol.steps-n{margin:0;padding-left:1.3em;display:grid;gap:12px;max-width:72ch}
+ol.steps-n li::marker{font-family:var(--mono);color:var(--accent);font-weight:600}
+.note{font-size:13.5px;color:var(--muted)}
+/* animation slides */
+.anim{display:grid;grid-template-columns:minmax(0,2.3fr) minmax(0,1fr);gap:20px;align-items:start}
+.anim>*{min-width:0}
+.stage{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px}
+.stage canvas{display:block;width:100%;aspect-ratio:960/500;max-width:100%}
+.ctrl{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+.ctrl button,.navb{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--surface2);color:var(--fg);border-radius:6px;padding:5px 11px;cursor:pointer;min-width:38px}
+.ctrl button:hover,.navb:hover{border-color:var(--accent)}
+.ctrl input{flex:1;min-width:120px;accent-color:var(--accent)}
+.ctrl .time{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:86px;text-align:right}
+.steps h3{font-size:13px;letter-spacing:.06em;color:var(--muted);margin-bottom:8px;font-weight:600}
+.steps ol{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.steps button{all:unset;box-sizing:border-box;display:grid;grid-template-columns:44px 1fr;gap:6px;width:100%;padding:7px 9px;border-radius:6px;font-size:14px;line-height:1.5;cursor:pointer;color:var(--muted)}
+.steps button .ts{font-family:var(--mono);font-size:11.5px;padding-top:2px}
+.steps button:hover{background:var(--surface2)}
+.steps li.now button{background:var(--surface);color:var(--fg);box-shadow:inset 0 0 0 1px var(--accent)}
+.steps li.now .ts{color:var(--accent)}
+.steps .cfg{margin-top:12px;font-size:12.5px;color:var(--muted);font-family:var(--mono);line-height:1.7}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.foot{display:flex;align-items:center;gap:12px;padding-block:8px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));border-top:1px solid var(--line);background:var(--surface)}
+.prog{flex:1;display:flex;gap:3px;min-width:0}
+.prog button{all:unset;flex:1;height:14px;cursor:pointer;display:flex;align-items:center}
+.prog button::before{content:"";display:block;width:100%;height:4px;border-radius:2px;background:var(--line)}
+.prog button.anim-s::before{background:var(--surface2);box-shadow:inset 0 0 0 1px var(--accent)}
+.prog button.done::before{background:var(--muted)}
+.prog button.cur::before{background:var(--accent);box-shadow:none;height:6px}
+.prog button:focus-visible{outline:2px solid var(--accent)}
+.kbd{font-size:12px;color:var(--muted);white-space:nowrap}
+@media (max-width:860px){
+  .anim,.cols{grid-template-columns:1fr}
+  .sig{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .kbd{display:none}
+  .inner{justify-content:flex-start}
+}
+@media (prefers-reduced-motion:reduce){.slide.active{animation:none}}
+</style>
+
+<div class="deck">
+  <header class="bar">
+    <span class="name">OpenTelemetry 동작 원리</span>
+    <span class="chap" id="chap"></span>
+    <span class="count" id="count">1 / 24</span>
+  </header>
+  <main class="viewport" id="vp">
+
+<!-- 1 -->
+<section class="slide" data-chap="표지">
+  <div class="inner">
+    <div class="eyebrow">Observability · 1주차 · 애니메이션 슬라이드</div>
+    <h1>OpenTelemetry 동작 원리</h1>
+    <p class="lead">신호가 만들어지고, 서비스 사이로 전파되고, 샘플링·집계·수집을 거쳐 Prometheus에서 조회되기까지. 알고리즘이 있는 슬라이드는 재생·되감기·단계 이동이 되는 애니메이션으로 구성했다.</p>
+    <div class="agenda" id="agenda"></div>
+    <p class="note">← → 또는 스와이프로 이동 · Space 재생/정지 · 애니메이션 슬라이드는 진행 바에 테두리로 표시</p>
+  </div>
+</section>
+
+<!-- 2 -->
+<section class="slide" data-chap="배경">
+  <div class="inner">
+    <div class="eyebrow">배경</div>
+    <h2>밖에서 안을 들여다봐야 하는 이유</h2>
+    <div class="cols">
+      <ul class="pts">
+        <li>모놀리스에서는 서버 한 대에 접속해 로그와 프로세스를 보면 됐다.</li>
+        <li>클라우드 네이티브에서는 요청 하나가 수십 개 서비스를 지나가고, 파드는 수시로 생겼다 사라진다. 장애가 난 파드는 이미 없을 수도 있다.</li>
+        <li>그래서 시스템이 스스로 상태를 <b>텔레메트리</b>로 내보내고, 밖에서 그것만으로 내부를 추론할 수 있어야 한다. 이것이 관측 가능성(observability)이다.</li>
+        <li>문제는 벤더마다 SDK·에이전트·포맷이 달랐다는 것. OpenTracing과 OpenCensus가 2019년 OpenTelemetry로 합쳐지며 계측 표준이 하나가 됐다.</li>
+      </ul>
+      <div class="fig"><img src="diagrams/02_otel_origin.png" alt="벤더별 계측(Before)과 OTel 표준 통합(After) 비교 다이어그램"></div>
+    </div>
+  </div>
+</section>
+
+<!-- 3 -->
+<section class="slide" data-chap="OTel과 5개 신호">
+  <div class="inner">
+    <div class="eyebrow">OpenTelemetry란</div>
+    <h2>텔레메트리를 만들고 내보내는 표준. 저장·조회는 하지 않는다</h2>
+    <p class="lead">API·SDK·데이터 포맷(OTLP)·Collector·시맨틱 컨벤션을 벤더 중립으로 정의한다. Jaeger나 Prometheus 같은 백엔드를 대체하지 않는다.</p>
+    <div class="sig">
+      <div style="--c:var(--trace)"><b>Traces</b><span>요청 하나가 서비스들을 지나간 경로. span의 트리</span></div>
+      <div style="--c:var(--metric)"><b>Metrics</b><span>시간 단위로 집계한 숫자. 대시보드와 알람의 기반</span></div>
+      <div style="--c:var(--log)"><b>Logs</b><span>타임스탬프가 붙은 레코드. 기존 로깅 라이브러리를 브리지</span></div>
+      <div style="--c:var(--baggage)"><b>Baggage</b><span>서비스 간에 전파되는 key-value. 다른 신호에 맥락을 보탠다</span></div>
+      <div style="--c:var(--profile)"><b>Profiles</b><span>스택 샘플링으로 본 CPU·메모리 사용 분포 (개발 중)</span></div>
+    </div>
+    <p class="note">신호들은 Resource(service.name, k8s.pod.name …)와 trace_id·span_id로 서로 연결된다.</p>
+  </div>
+</section>
+
+<!-- 4 -->
+<section class="slide" data-chap="구성 요소">
+  <div class="inner">
+    <div class="eyebrow">구성 요소</div>
+    <h2>API → SDK → Exporter → OTLP → Collector → 백엔드</h2>
+    <div class="cols">
+      <div class="fig"><img src="diagrams/03_otel_components.png" alt="애플리케이션의 API, SDK, Exporter에서 Collector를 거쳐 Prometheus, Loki, Tempo로 가는 데이터 흐름"></div>
+      <ul class="pts">
+        <li><b>API</b>: Tracer·Meter·Logger 인터페이스. SDK가 없으면 아무것도 하지 않는(no-op) 구현이라 라이브러리가 안심하고 의존한다.</li>
+        <li><b>SDK</b>: 샘플링, 배치, 집계, Resource 부착 같은 실제 처리를 한다.</li>
+        <li><b>Exporter</b>: 처리된 데이터를 OTLP(gRPC 4317 / HTTP 4318) 등으로 내보낸다.</li>
+        <li><b>Collector</b>: receiver → processor → exporter 파이프라인. 앱과 백엔드 사이의 완충·가공 지점.</li>
+        <li><b>계측</b>: 라이브러리 호출을 가로채는 제로 코드 계측과, 코드에 직접 span·metric을 넣는 코드 기반 계측을 함께 쓴다.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 5 -->
+<section class="slide" data-chap="Traces 데이터 모델">
+  <div class="inner">
+    <div class="eyebrow">Traces</div>
+    <h2>Trace는 span의 트리, span은 작업 하나</h2>
+    <div class="tw"><table>
+      <thead><tr><th>필드</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>trace_id</code></td><td>16바이트. 요청 전체가 공유한다</td></tr>
+        <tr><td><code>span_id</code> / <code>parent_span_id</code></td><td>8바이트. 부모 관계로 트리를 만든다. 루트 span은 부모가 없다</td></tr>
+        <tr><td><code>name</code>, 시작·종료 시각</td><td><code>GET /checkout</code>처럼 낮은 카디널리티 이름</td></tr>
+        <tr><td><code>attributes</code></td><td>시맨틱 컨벤션 key-value (<code>http.request.method</code>, <code>db.system</code> …)</td></tr>
+        <tr><td><code>events</code> / <code>links</code></td><td>span 안의 시점 사건(예외) / 다른 트레이스와의 인과 관계(배치, 메시지 큐)</td></tr>
+        <tr><td><code>status</code></td><td><code>Unset</code> · <code>Ok</code> · <code>Error</code></td></tr>
+        <tr><td><code>kind</code></td><td><code>SERVER</code> · <code>CLIENT</code> · <code>PRODUCER</code> · <code>CONSUMER</code> · <code>INTERNAL</code></td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">다음 슬라이드: 서로 다른 프로세스의 span이 어떻게 같은 trace_id를 갖게 되는지.</p>
+  </div>
+</section>
+
+<!-- 6 -->
+<section class="slide" data-chap="컨텍스트 전파">
+  <div class="inner">
+    <div class="eyebrow">애니메이션 · Context Propagation</div>
+    <h2>trace_id는 HTTP 헤더를 타고 다음 서비스로 넘어간다</h2>
+    <div class="anim">
+      <div class="stage" data-scene="propagation"><canvas role="img" aria-label="gateway, order, payment 세 서비스 사이로 traceparent 헤더가 전달되며 span 트리가 만들어지는 애니메이션"></canvas></div>
+      <aside class="steps"></aside>
+    </div>
+  </div>
+</section>
+
+<!-- 7 -->
+<section class="slide" data-chap="traceparent 해부">
+  <div class="inner">
+    <div class="eyebrow">W3C Trace Context · Baggage</div>
+    <h2>traceparent 헤더 한 줄에 담긴 것</h2>
+    <div class="tp">traceparent: <span class="v">00</span>-<span class="t">4bf92f3577b34da6a3ce929d0e0e4736</span>-<span class="s">00f067aa0ba902b7</span>-<span class="f">01</span></div>
+    <div class="tw"><table>
+      <thead><tr><th>부분</th><th>길이</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td>version</td><td class="mono">2 hex</td><td>현재 <code>00</code></td></tr>
+        <tr><td style="color:var(--trace)">trace-id</td><td class="mono">32 hex</td><td>트레이스 전체 식별자. 전 구간에서 그대로 유지</td></tr>
+        <tr><td style="color:var(--accent)">parent-id</td><td class="mono">16 hex</td><td>보낸 쪽의 현재 span_id. 받는 쪽 span의 부모가 된다. 홉마다 바뀐다</td></tr>
+        <tr><td style="color:var(--ok)">trace-flags</td><td class="mono">2 hex</td><td><code>01</code> = sampled. 하위 서비스가 기록 여부를 따른다</td></tr>
+      </tbody>
+    </table></div>
+    <div class="tp" style="font-size:clamp(14px,1.7vw,20px)"><span style="color:var(--baggage)">baggage:</span> tenant.id=acme,user.tier=premium</div>
+    <p class="note">Baggage는 같은 경로로 전파되지만 span·metric 속성으로 자동 복사되지 않는다. 외부 호출에도 실리므로 토큰·개인정보는 넣지 않는다.</p>
+  </div>
+</section>
+
+<!-- 8 -->
+<section class="slide" data-chap="BatchSpanProcessor">
+  <div class="inner">
+    <div class="eyebrow">애니메이션 · SDK 내부</div>
+    <h2>BatchSpanProcessor: 모았다가 한 번에 보낸다</h2>
+    <div class="anim">
+      <div class="stage" data-scene="batch"><canvas role="img" aria-label="종료된 span이 큐에 쌓이고, 배치 크기나 타이머 조건으로 export되며, 백엔드 장애 시 큐가 차서 span이 버려지는 애니메이션"></canvas></div>
+      <aside class="steps"></aside>
+    </div>
+  </div>
+</section>
+
+<!-- 9 -->
+<section class="slide" data-chap="샘플링 개요">
+  <div class="inner">
+    <div class="eyebrow">Sampling</div>
+    <h2>언제 버릴지 정하는 두 가지 방식</h2>
+    <div class="tw"><table>
+      <thead><tr><th></th><th>Head sampling</th><th>Tail sampling</th></tr></thead>
+      <tbody>
+        <tr><td>결정 시점</td><td>루트 span 시작 시 (SDK)</td><td>트레이스가 끝난 뒤 (Collector)</td></tr>
+        <tr><td>판단 근거</td><td>trace_id 값, 부모 플래그</td><td>에러 여부, 지연 시간, 속성 등 전체 트레이스</td></tr>
+        <tr><td>비용</td><td>버린 span은 만들지도 보내지도 않는다</td><td>모든 span을 일단 받아 메모리에 들고 있어야 한다</td></tr>
+        <tr><td>약점</td><td>에러 트레이스도 같은 확률로 버린다</td><td>한 트레이스의 span이 같은 Collector로 모여야 한다</td></tr>
+        <tr><td>설정</td><td><code>OTEL_TRACES_SAMPLER=parentbased_traceidratio</code></td><td><code>tail_sampling</code> processor + <code>loadbalancing</code> exporter</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</section>
+
+<!-- 10 -->
+<section class="slide" data-chap="Head sampling">
+  <div class="inner">
+    <div class="eyebrow">애니메이션 · TraceIdRatioBased + ParentBased</div>
+    <h2>trace_id 자체가 주사위다</h2>
+    <div class="anim">
+      <div class="stage" data-scene="head"><canvas role="img" aria-label="trace_id 하위 64비트를 0과 1 사이 값으로 바꿔 0.25 미만이면 샘플링하고, 하위 서비스는 부모 플래그를 따르는 애니메이션"></canvas></div>
+      <aside class="steps"></aside>
+    </div>
+  </div>
+</section>
+
+<!-- 11 -->
+<section class="slide" data-chap="Tail sampling">
+  <div class="inner">
+    <div class="eyebrow">애니메이션 · Collector tail_sampling</div>
+    <h2>끝까지 보고 나서 남길 트레이스를 고른다</h2>
+    <div class="anim">
+      <div class="stage" data-scene="tail"><canvas role="img" aria-label="Collector가 trace_id별로 span을 모으고 decision_wait 이후 정책으로 keep 또는 drop을 결정하는 애니메이션"></canvas></div>
+      <aside class="steps"></aside>
+    </div>
+  </div>
+</section>
+
+<!-- 12 -->
+<section class="slide" data-chap="Metrics 모델">
+  <div class="inner">
+    <div class="eyebrow">Metrics</div>
+    <h2>Instrument로 측정하고, Aggregation으로 줄인다</h2>
+    <div class="cols">
+      <div class="tw"><table>
+        <thead><tr><th>Instrument</th><th>기본 집계</th><th>예</th></tr></thead>
+        <tbody>
+          <tr><td>Counter</td><td>Sum (단조 증가)</td><td>요청 수</td></tr>
+          <tr><td>UpDownCounter</td><td>Sum</td><td>활성 연결 수</td></tr>
+          <tr><td>Histogram</td><td>Explicit bucket</td><td>지연 시간</td></tr>
+          <tr><td>Gauge</td><td>Last value</td><td>온도</td></tr>
+          <tr><td>Observable*</td><td>수집 시 callback</td><td>메모리 사용량</td></tr>
+        </tbody>
+      </table></div>
+      <ul class="pts">
+        <li><b>측정은 즉시, 내보내기는 주기적으로.</b> 값은 SDK 메모리의 집계 상태만 바꾸고, MetricReader가 주기(기본 60s)마다 꺼내 간다.</li>
+        <li><b>Temporality</b>: Cumulative는 시작부터 누적(Prometheus), Delta는 직전 수집 이후 증가분.</li>
+        <li><b>View</b>: SDK 단계에서 버킷 경계, 남길 attribute, 집계 방식을 바꾼다.</li>
+        <li><b>Exemplar</b>: 측정 순간 활성 span의 trace_id를 샘플로 붙여 메트릭에서 트레이스로 건너간다.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 13 -->
+<section class="slide" data-chap="Histogram 집계">
+  <div class="inner">
+    <div class="eyebrow">애니메이션 · Aggregation · Temporality · Exemplar</div>
+    <h2>측정값 하나가 버킷 카운트가 되기까지</h2>
+    <div class="anim">
+      <div class="stage" data-scene="histogram"><canvas role="img" aria-label="지연 시간 측정값이 버킷에 쌓이고, 수집 주기마다 cumulative와 delta로 내보내지며, 느린 요청에 exemplar가 붙는 애니메이션"></canvas></div>
+      <aside class="steps"></aside>
+    </div>
+  </div>
+</section>
+
+<!-- 14 -->
+<section class="slide" data-chap="Cardinality">
+  <div class="inner">
+    <div class="eyebrow">애니메이션 · Cardinality</div>
+    <h2>attribute 하나가 시계열 수를 곱한다</h2>
+    <div class="anim">
+      <div class="stage" data-scene="cardinality"><canvas role="img" aria-label="attribute를 하나씩 추가할 때 시계열 수가 곱으로 늘어나는 로그 스케일 막대 애니메이션"></canvas></div>
+      <aside class="steps"></aside>
+    </div>
+  </div>
+</section>
+
+<!-- 15 -->
+<section class="slide" data-chap="Logs">
+  <div class="inner">
+    <div class="eyebrow">Logs</div>
+    <h2>로그는 새로 만들지 않고 기존 로거에 다리를 놓는다</h2>
+    <div class="cols">
+      <div style="display:grid;gap:14px">
+        <h3>수집 경로 두 가지</h3>
+        <div class="flow"><span>앱 로거 (logging, Logback)</span><i>→</i><span>Log Bridge</span><i>→</i><span>SDK</span><i>→</i><span>OTLP</span></div>
+        <div class="flow"><span>stdout / 파일</span><i>→</i><span>Collector filelog receiver</span><i>→</i><span>파싱·변환</span></div>
+        <p class="note">컨테이너 환경의 lab은 두 번째 경로(agent DaemonSet의 filelog)도 함께 쓴다.</p>
+      </div>
+      <ul class="pts">
+        <li><b>LogRecord</b>: Timestamp, ObservedTimestamp, SeverityNumber(1~24), Body, Attributes, Resource.</li>
+        <li><b>TraceId·SpanId</b>: 활성 span 안에서 찍히면 SDK가 자동으로 채운다. 로그 ↔ 트레이스 연결의 핵심. (컨텍스트 전파 애니메이션의 에러 로그 장면)</li>
+        <li><b>Events</b>: <code>event.name</code> 속성을 가진 LogRecord. 별도 신호가 아니다.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 16 -->
+<section class="slide" data-chap="Profiles">
+  <div class="inner">
+    <div class="eyebrow">애니메이션 · Profiles</div>
+    <h2>스택을 주기적으로 찍어 합치면 flame graph가 된다</h2>
+    <div class="anim">
+      <div class="stage" data-scene="profiles"><canvas role="img" aria-label="실행 중인 콜 스택을 주기적으로 샘플링해 같은 스택끼리 합산하고 flame graph로 그리는 애니메이션"></canvas></div>
+      <aside class="steps"></aside>
+    </div>
+  </div>
+</section>
+
+<!-- 17 -->
+<section class="slide" data-chap="Collector 파이프라인">
+  <div class="inner">
+    <div class="eyebrow">애니메이션 · OpenTelemetry Collector</div>
+    <h2>receiver → processor → exporter, 신호별 파이프라인</h2>
+    <div class="anim">
+      <div class="stage" data-scene="collector"><canvas role="img" aria-label="트레이스, 메트릭, 로그가 receiver, memory_limiter, k8s_attributes, batch processor를 지나 각 백엔드로 나가는 애니메이션"></canvas></div>
+      <aside class="steps"></aside>
+    </div>
+  </div>
+</section>
+
+<!-- 18 -->
+<section class="slide" data-chap="배포 패턴">
+  <div class="inner">
+    <div class="eyebrow">Kubernetes 배포</div>
+    <h2>노드마다 agent, 클러스터에 gateway</h2>
+    <div class="cols">
+      <div class="fig"><img src="diagrams/04_collector_k8s.png" alt="노드별 agent Collector DaemonSet과 gateway Collector Deployment 배포 구조"></div>
+      <ul class="pts">
+        <li><b>agent (DaemonSet)</b>: 같은 노드의 앱이 OTLP로 보내는 가까운 수신처. 노드 로그 파일(filelog), kubelet 메트릭도 여기서 수집.</li>
+        <li><b>gateway (Deployment)</b>: 클러스터 단위 처리. tail sampling, 인증, 백엔드별 라우팅을 한곳에서.</li>
+        <li><b>k8s_attributes</b>: 송신 파드 IP로 Kubernetes API를 조회해 <code>k8s.pod.name</code>, <code>k8s.namespace.name</code> 등을 Resource에 붙인다.</li>
+        <li><b>Operator</b>: <code>Instrumentation</code> CR + 파드 annotation으로 제로 코드 계측을 자동 주입.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 19 -->
+<section class="slide" data-chap="Prometheus 구조">
+  <div class="inner">
+    <div class="eyebrow">Prometheus</div>
+    <h2>당겨 오는(pull) 시계열 데이터베이스</h2>
+    <div class="cols">
+      <ul class="pts">
+        <li><b>scrape</b>: 대상의 <code>/metrics</code>를 주기적으로 GET. 대상 목록은 service discovery(Kubernetes API 등)가 채운다.</li>
+        <li><b>TSDB</b>: 메트릭 이름 + label 집합 하나가 시계열 하나. 2시간 단위 블록, WAL로 내구성 확보.</li>
+        <li><b>PromQL</b>: <code>rate()</code>, <code>histogram_quantile()</code> 등으로 조회 시점에 계산.</li>
+        <li><b>Alertmanager</b>: 규칙이 발화한 알람을 묶고, 억제하고, 라우팅.</li>
+        <li><b>OTel과 만나는 곳</b>: Collector의 <code>prometheusremotewrite</code> exporter, 또는 Prometheus의 OTLP 수신 경로 <code>/api/v1/otlp</code>.</li>
+      </ul>
+      <div class="fig"><img src="diagrams/06_prometheus_architecture.png" alt="Prometheus의 service discovery, scrape, TSDB, PromQL, Alertmanager 구조"></div>
+    </div>
+  </div>
+</section>
+
+<!-- 20 -->
+<section class="slide" data-chap="Scrape 루프">
+  <div class="inner">
+    <div class="eyebrow">애니메이션 · Scrape · Service Discovery · up</div>
+    <h2>주기적으로 묻고, 대답이 없으면 그것도 기록한다</h2>
+    <div class="anim">
+      <div class="stage" data-scene="scrape"><canvas role="img" aria-label="Prometheus가 주기적으로 대상을 scrape하고, 새 파드를 발견해 추가하며, 응답 없는 대상을 up=0으로 기록하는 애니메이션"></canvas></div>
+      <aside class="steps"></aside>
+    </div>
+  </div>
+</section>
+
+<!-- 21 -->
+<section class="slide" data-chap="rate()">
+  <div class="inner">
+    <div class="eyebrow">애니메이션 · PromQL rate()</div>
+    <h2>Counter는 기울기로 읽는다. 재시작은 보정한다</h2>
+    <div class="anim">
+      <div class="stage" data-scene="rate"><canvas role="img" aria-label="카운터 샘플 위로 1분 창이 이동하며 증가량을 계산하고, 재시작으로 값이 떨어진 지점을 보정하는 애니메이션"></canvas></div>
+      <aside class="steps"></aside>
+    </div>
+  </div>
+</section>
+
+<!-- 22 -->
+<section class="slide" data-chap="histogram_quantile()">
+  <div class="inner">
+    <div class="eyebrow">애니메이션 · PromQL histogram_quantile()</div>
+    <h2>p95는 버킷 안에서 선형 보간한 추정값이다</h2>
+    <div class="anim">
+      <div class="stage" data-scene="quantile"><canvas role="img" aria-label="누적 버킷 카운트에서 95번째 순위가 들어간 버킷을 찾고 버킷 안에서 선형 보간해 p95를 구하는 애니메이션"></canvas></div>
+      <aside class="steps"></aside>
+    </div>
+  </div>
+</section>
+
+<!-- 23 -->
+<section class="slide" data-chap="lab에서 따라간 장애">
+  <div class="inner">
+    <div class="eyebrow">lab 실측 · kind-observability</div>
+    <h2>메트릭 → 트레이스 → 로그, 실제로 건너가 보기</h2>
+    <ol class="steps-n">
+      <li><b>Metrics</b> (Prometheus): 세 서비스 모두 에러 비율 약 6.8%. p95는 gateway 0.25s, order 0.227s, payment 0.148s.</li>
+      <li><b>Exemplar</b>: payment 히스토그램 버킷에 붙은 샘플 <code>trace_id=be6b98dd935c84623faea3d39b4b9ccb</code>, <code>span_id=318c46784283face</code>.</li>
+      <li><b>Trace</b> (Tempo): 같은 trace_id를 열면 gateway → order → payment 트리. 에러는 payment <code>POST /pay</code>에서 시작.</li>
+      <li><b>Logs</b> (Loki): 같은 trace_id로 검색하면 payment의 ERROR 로그 <code>payment gateway timeout</code>, span_id도 일치.</li>
+    </ol>
+    <p class="note">세 신호를 잇는 것은 각각 exemplar(메트릭→트레이스)와 LogRecord의 TraceId·SpanId(로그→트레이스). 모두 컨텍스트 전파 덕분에 같은 값을 가진다.</p>
+  </div>
+</section>
+
+<!-- 24 -->
+<section class="slide" data-chap="정리">
+  <div class="inner">
+    <div class="eyebrow">정리</div>
+    <h2>알고리즘과 그 손잡이</h2>
+    <div class="tw"><table>
+      <thead><tr><th>동작</th><th>어디서</th><th>조정하는 설정</th></tr></thead>
+      <tbody>
+        <tr><td>컨텍스트 전파</td><td>SDK propagator</td><td><code>OTEL_PROPAGATORS=tracecontext,baggage</code></td></tr>
+        <tr><td>배치 전송</td><td>BatchSpanProcessor</td><td><code>OTEL_BSP_SCHEDULE_DELAY</code>, <code>OTEL_BSP_MAX_QUEUE_SIZE</code>, <code>OTEL_BSP_MAX_EXPORT_BATCH_SIZE</code></td></tr>
+        <tr><td>Head sampling</td><td>SDK sampler</td><td><code>OTEL_TRACES_SAMPLER</code>, <code>OTEL_TRACES_SAMPLER_ARG</code></td></tr>
+        <tr><td>Tail sampling</td><td>Collector</td><td><code>tail_sampling.decision_wait</code>, <code>policies</code></td></tr>
+        <tr><td>메트릭 집계 주기</td><td>PeriodicExportingMetricReader</td><td><code>OTEL_METRIC_EXPORT_INTERVAL</code></td></tr>
+        <tr><td>버킷·attribute</td><td>View</td><td>SDK 코드 또는 Collector <code>transform</code>·<code>filter</code></td></tr>
+        <tr><td>메모리 보호</td><td>Collector</td><td><code>memory_limiter.limit_percentage</code></td></tr>
+        <tr><td>scrape</td><td>Prometheus</td><td><code>scrape_interval</code>, <code>*_sd_configs</code></td></tr>
+        <tr><td>p95 정확도</td><td>버킷 설계</td><td>SLO 경계 근처에 버킷 경계를 둔다</td></tr>
+      </tbody>
+    </table></div>
+    <p class="note">출처: opentelemetry.io/docs (CC BY 4.0), prometheus.io/docs. 애니메이션의 시간과 크기는 보기 쉽게 축소했다.</p>
+  </div>
+</section>
+
+  </main>
+  <footer class="foot">
+    <button class="navb" id="prev" aria-label="이전 슬라이드">←</button>
+    <nav class="prog" id="prog" aria-label="슬라이드 진행"></nav>
+    <button class="navb" id="next" aria-label="다음 슬라이드">→</button>
+    <span class="kbd">← → · Space</span>
+  </footer>
+</div>
+
+<script>
+(() => {
+const SANS='"IBM Plex Sans KR","Apple SD Gothic Neo",sans-serif';
+const MONO='"IBM Plex Mono",ui-monospace,Menlo,monospace';
+const W=960,H=500;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const lerp=(a,b,p)=>a+(b-a)*p;
+const seg=(t,a,b)=>clamp((t-a)/(b-a),0,1);
+const ease=p=>p<.5?2*p*p:1-Math.pow(-2*p+2,2)/2;
+function alpha(hex,a){let h=(hex||'#888888').replace('#','');if(h.length===3)h=h.split('').map(c=>c+c).join('');const n=parseInt(h,16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;}
+function rng(seed){return function(){seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const TOK=['bg','surface','surface2','fg','muted','line','accent','trace','metric','log','profile','baggage','ok','bad'];
+function colors(){const cs=getComputedStyle(document.documentElement);const C={};TOK.forEach(k=>C[k]=cs.getPropertyValue('--'+k).trim());return C;}
+
+function kit(ctx,C){
+  const g={ctx,C};
+  g.font=(o)=>`${o.w||500} ${o.size||14}px ${o.mono?MONO:SANS}`;
+  g.rr=(x,y,w,h,r)=>{ctx.beginPath();if(ctx.roundRect)ctx.roundRect(x,y,w,h,Math.min(r,w/2,h/2));else ctx.rect(x,y,w,h);};
+  g.box=(x,y,w,h,o={})=>{g.rr(x,y,w,h,o.r??8);if(o.fill){ctx.fillStyle=o.fill;ctx.fill();}if(o.stroke){ctx.lineWidth=o.lw??1.5;ctx.strokeStyle=o.stroke;ctx.setLineDash(o.dash||[]);ctx.stroke();ctx.setLineDash([]);}};
+  g.text=(s,x,y,o={})=>{const pa=ctx.globalAlpha;ctx.globalAlpha=pa*(o.alpha??1);ctx.font=g.font(o);ctx.fillStyle=o.color||C.fg;ctx.textAlign=o.align||'left';ctx.textBaseline=o.base||'middle';ctx.fillText(s,x,y);ctx.globalAlpha=pa;};
+  g.mw=(s,o={})=>{ctx.font=g.font(o);return ctx.measureText(s).width;};
+  g.line=(x1,y1,x2,y2,o={})=>{ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.strokeStyle=o.color||C.line;ctx.lineWidth=o.lw||1.5;ctx.setLineDash(o.dash||[]);ctx.stroke();ctx.setLineDash([]);};
+  g.arrow=(x1,y1,x2,y2,o={})=>{g.line(x1,y1,x2,y2,o);const a=Math.atan2(y2-y1,x2-x1),s=o.head||8;ctx.beginPath();ctx.moveTo(x2,y2);ctx.lineTo(x2-s*Math.cos(a-.45),y2-s*Math.sin(a-.45));ctx.lineTo(x2-s*Math.cos(a+.45),y2-s*Math.sin(a+.45));ctx.closePath();ctx.fillStyle=o.color||C.line;ctx.fill();};
+  g.dot=(x,y,r,fill,stroke,lw)=>{ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);if(fill){ctx.fillStyle=fill;ctx.fill();}if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=lw||1.5;ctx.stroke();}};
+  g.chip=(s,x,y,o={})=>{const size=o.size||12,w=g.mw(s,{...o,size})+14,h=size+10;const x0=o.align==='center'?x-w/2:o.align==='right'?x-w:x;g.box(x0,y-h/2,w,h,{r:h/2,fill:o.bg||C.surface2,stroke:o.stroke,lw:1});g.text(s,x0+7,y+.5,{...o,size,align:'left'});return w;};
+  g.alpha=(a,fn)=>{const pa=ctx.globalAlpha;ctx.globalAlpha=pa*a;fn();ctx.globalAlpha=pa;};
+  return g;
+}
+
+/* ───────────── scenes ───────────── */
+const SC={};
+
+/* 1. context propagation */
+SC.propagation={dur:13,
+steps:[[0,'요청 도착. gateway가 루트 span을 만든다. 부모가 없으니 새 trace_id를 생성'],
+[1.2,'inject: 현재 context(trace_id + 자기 span_id)를 traceparent 헤더에 쓴다'],
+[3.0,'extract: order가 헤더에서 부모 context를 복원하고 자식 span을 시작. trace_id는 그대로'],
+[4.6,'order → payment 호출. 헤더의 parent-id는 이제 order의 span_id'],
+[6.2,'payment span 시작. 같은 트레이스의 세 번째 span'],
+[7.3,'에러 로그. Log Bridge가 활성 span의 trace_id·span_id를 LogRecord에 자동으로 넣는다'],
+[8.4,'span은 역순으로 끝난다. payment는 status=Error'],
+[11.0,'세 span은 같은 trace_id를 갖고, parent-id로 백엔드에서 한 트리로 재구성된다']],
+cfg:'OTEL_PROPAGATORS=tracecontext,baggage',
+draw(g,t){const C=g.C;
+  const S=[{n:'gateway',x:70,on:[.6,11],id:'a1f3'},{n:'order',x:400,on:[3.2,10.2],id:'b27c'},{n:'payment',x:730,on:[6.2,8.4],id:'c9e0'}];
+  g.line(230,55,400,55,{lw:2});g.line(560,55,730,55,{lw:2});
+  if(t<1.4){g.arrow(8,55,66,55,{color:C.fg,lw:2});g.text('GET /checkout',10,12,{size:11,color:C.muted,mono:true});}
+  S.forEach((s,i)=>{const on=t>=s.on[0]&&t<s.on[1],done=t>=s.on[1],err=i===2&&t>=7.3,col=err?C.bad:C.trace;
+    g.box(s.x,24,160,62,{fill:on?alpha(col,.14):C.surface2,stroke:on?col:C.line,lw:on?2:1.5});
+    g.text(s.n,s.x+80,45,{align:'center',w:600,size:16});
+    g.text(on?'active span '+s.id:done?'span 종료':'대기',s.x+80,68,{align:'center',size:12,mono:true,color:on?col:C.muted});});
+  const pk=(x1,x2,a,b,col)=>{if(t<a||t>b)return;const x=lerp(x1,x2,ease(seg(t,a,b)));g.dot(x,55,7,col);};
+  pk(230,400,1.8,3.2,C.trace);pk(560,730,4.8,6.2,C.trace);pk(730,560,8.4,9.2,C.bad);pk(400,230,10.2,10.9,C.bad);
+  if(t>=8.4&&t<9.6)g.text('500',645,40,{align:'center',size:12,mono:true,color:C.bad,w:600});
+  if(t>=10.2&&t<11.4)g.text('500',315,40,{align:'center',size:12,mono:true,color:C.bad,w:600});
+  const card=(cx,a,b,label,hdr)=>{if(t<a)return;g.alpha(t<=b+.8?1:.45,()=>{g.box(cx-165,98,330,50,{fill:C.surface,stroke:alpha(C.trace,.6),lw:1.2});g.text(label,cx-152,113,{size:12,color:C.muted});g.text(hdr,cx-152,134,{size:12,mono:true,color:C.trace,w:500});});};
+  card(315,1.2,3.2,'① gateway: inject(context → 헤더)','traceparent: 00-4bf9…4736-a1f3…-01');
+  card(645,4.6,6.2,'③ order: inject','traceparent: 00-4bf9…4736-b27c…-01');
+  if(t>=3&&t<4.6)g.chip('② extract → parent = a1f3',480,170,{align:'center',mono:true,color:C.fg,stroke:C.trace});
+  if(t>=6&&t<7.3)g.chip('④ extract → parent = b27c',810,170,{align:'center',mono:true,color:C.fg,stroke:C.trace});
+  if(t>=7.3){g.alpha(seg(t,7.3,7.7),()=>{g.box(560,156,390,66,{fill:alpha(C.log,.1),stroke:C.log,lw:1.5});
+    g.text('LogRecord  severity=ERROR',572,172,{size:12,w:600,color:C.log,mono:true});
+    g.text('body="payment gateway timeout"',572,190,{size:12,mono:true});
+    g.text('trace_id=4bf9…4736  span_id=c9e0…',572,208,{size:12,mono:true,color:C.trace});});}
+  const tx=s=>210+(s-.5)/11*700;
+  g.text('trace_id 4bf92f3577b34da6a3ce929d0e0e4736',20,246,{mono:true,size:13,color:C.muted});
+  g.line(210,262,910,262);
+  const R=[{l:'gateway  GET /checkout',d:0,s:.6,e:11,id:'a1f3',p:'—'},{l:'order  POST /orders',d:1,s:3.2,e:10.2,id:'b27c',p:'a1f3'},{l:'payment  POST /pay',d:2,s:6.2,e:8.4,id:'c9e0',p:'b27c',err:1}];
+  R.forEach((r,i)=>{const y=296+i*52;g.text(r.l,20+r.d*14,y,{size:13,color:t>=r.s?C.fg:C.muted});
+    if(t<r.s)return;const x1=tx(r.s),x2=tx(Math.min(t,r.e)),col=r.err&&t>=7.3?C.bad:C.trace,done=t>=r.e;
+    g.box(x1,y-13,Math.max(3,x2-x1),26,{r:4,fill:alpha(col,done?.85:.4),stroke:col,lw:1});
+    const lab=`span ${r.id} · parent ${r.p}`;
+    if(x2-x1>178)g.text(lab,x1+8,y,{size:12,mono:true,color:done?C.bg:C.fg});else g.text(lab,x2+8,y,{size:12,mono:true,color:C.muted});
+    if(i>0){const py=296+(i-1)*52;g.line(x1,py+13,x1,y-13,{color:col,dash:[3,3],lw:1.2});}});
+  if(t>=11)g.alpha(seg(t,11,11.5),()=>g.text('같은 trace_id → 백엔드에서 하나의 트리로 조회',910,462,{align:'right',w:600,color:C.trace}));
+}};
+
+/* 2. BatchSpanProcessor */
+const BSP_SPAWN=(()=>{const a=[.5,1.4,2.2];for(let s=4.2;s<=6.01;s+=.2)a.push(+s.toFixed(2));for(let s=9;s<=14.6;s+=.18)a.push(+s.toFixed(2));return a;})();
+function simBatch(T){let q=[],next=0,timer=0,exp=null,exported=0,dropped=0,lastDrop=-9,ev=[],born={};const dt=1/30;
+  for(let now=0;now<=T+1e-9;now+=dt){
+    while(next<BSP_SPAWN.length&&BSP_SPAWN[next]<=now){const id=next++;if(q.length<16){q.push(id);born[id]=now;}else{dropped++;lastDrop=now;}}
+    if(exp&&now>=exp.end){exported+=exp.ids.length;exp=null;timer=now;}
+    if(!exp){let why=null;if(q.length>=4)why='size';else if(now-timer>=2.5){if(q.length)why='timer';else timer=now;}
+      if(why){const ids=q.splice(0,4),ok=now<9;exp={ids,start:now,end:ok?now+.6:1e9,ok};ev.push({at:now,why,n:ids.length,ok});}}}
+  return {q,exp,exported,dropped,lastDrop,ev,born,timer};}
+SC.batch={dur:15,
+steps:[[0,'span.end() 시점에 span은 바로 나가지 않고 큐에 들어간다'],
+[2.2,'타이머(schedule_delay)가 만료되면 모인 만큼만 내보낸다'],
+[4.2,'트래픽 급증: 배치 크기가 차면 타이머를 기다리지 않고 즉시 export'],
+[9.0,'백엔드 장애: export가 응답을 기다리는 동안 큐가 계속 찬다'],
+[12.4,'큐가 가득 차면 새 span은 버려진다(drop). 앱 스레드는 막히지 않는다']],
+cfg:'실제 기본값 → 그림 축소값<br>max_queue_size 2048 → 16<br>max_export_batch_size 512 → 4<br>schedule_delay 5s → 2.5s<br>export_timeout 30s',
+draw(g,t){const C=g.C,s=simBatch(t),down=t>=9;
+  g.box(30,150,150,120,{fill:C.surface2,stroke:C.line});g.text('app',105,182,{align:'center',w:600,size:16});g.text('span.end()',105,206,{align:'center',mono:true,size:12,color:C.muted});
+  const recent=BSP_SPAWN.filter(x=>x<=t&&t-x<.25).length;if(recent)g.dot(105,236,7,C.trace);
+  if(t-s.lastDrop<.4)g.text('drop!',105,252,{align:'center',color:C.bad,w:700,size:13});
+  g.text('큐 (16칸)',230,132,{size:13,color:C.muted});
+  for(let i=0;i<16;i++){const x=230+(i%8)*50,y=150+Math.floor(i/8)*48,id=s.q[i];
+    const filled=id!==undefined,fresh=filled&&t-s.born[id]<.3;
+    g.box(x,y,42,40,{r:6,fill:filled?alpha(C.trace,fresh?.9:.55):C.surface,stroke:filled?C.trace:C.line,lw:1});}
+  g.line(230,252,422,252,{color:C.accent,lw:2});g.text('batch 4',326,266,{align:'center',size:12,color:C.accent,mono:true});
+  const full=s.q.length>=16;if(full)g.text('가득 참',626,132,{align:'right',color:C.bad,w:600,size:13});
+  g.text('schedule_delay 타이머',230,298,{size:12,color:C.muted});
+  g.box(390,292,240,10,{r:5,fill:C.surface2});
+  if(!s.exp){const p=clamp((t-s.timer)/2.5,0,1);g.box(390,292,Math.max(4,240*p),10,{r:5,fill:C.accent});}
+  else g.text('export 중 (타이머 정지)',630,298,{align:'right',size:12,color:C.muted});
+  g.box(670,150,120,120,{fill:C.surface2,stroke:C.line});g.text('exporter',730,182,{align:'center',w:600});g.text('OTLP',730,204,{align:'center',size:12,mono:true,color:C.muted});
+  g.box(820,150,120,120,{fill:down?alpha(C.bad,.12):C.surface2,stroke:down?C.bad:C.line});g.text('backend',880,182,{align:'center',w:600});
+  g.text(down?'응답 없음':'정상',880,204,{align:'center',size:12,color:down?C.bad:C.ok,w:600});
+  g.arrow(632,210,666,210);g.arrow(792,210,816,210,{color:down?C.bad:C.line});
+  if(s.exp){if(s.exp.ok){const p=ease(seg(t,s.exp.start,s.exp.end));s.exp.ids.forEach((id,j)=>g.dot(lerp(430,880,p)+j*-12,240,6,C.trace));}
+    else{s.exp.ids.forEach((id,j)=>g.dot(706+j*16,240,6,C.trace));const k=Math.floor(t*4)%4;g.text('대기'+'.'.repeat(k),730,226,{align:'center',size:12,color:C.bad});}}
+  g.text('exported',30,350,{size:12,color:C.muted});g.text(String(s.exported),30,378,{size:26,w:700,mono:true,color:C.ok});
+  g.text('dropped',150,350,{size:12,color:C.muted});g.text(String(s.dropped),150,378,{size:26,w:700,mono:true,color:s.dropped?C.bad:C.muted});
+  g.text('flush 기록',300,350,{size:12,color:C.muted});
+  s.ev.slice(-4).forEach((e,i)=>{const lab=e.why==='size'?'배치 가득 참':'타이머 만료';
+    g.text(`t=${e.at.toFixed(1)}s  ${lab} → ${e.n}개 ${e.ok?'전송':'전송 시도 (응답 대기)'}`,300,376+i*22,{size:13,mono:true,color:e.ok?C.fg:C.bad});});
+}};
+
+/* 3. head sampling */
+const HEAD=(()=>{const r=rng(19),o=[];for(let i=0;i<24;i++){let h='';for(let j=0;j<32;j++)h+='0123456789abcdef'[Math.floor(r()*16)];o.push({hex:h,v:parseInt(h.slice(16,29),16)/Math.pow(16,13),at:.4+i*.42});}return o;})();
+SC.head={dur:12,
+steps:[[0,'루트 서비스가 새 trace_id를 만든 직후에 결정한다'],
+[0.4,'trace_id 하위 64비트를 0~1 사이 값으로 본다. trace_id는 무작위라 균등 분포'],
+[2.0,'값 < ratio(0.25)면 sampled. 비율만큼 통과한다'],
+[5.0,'하위 서비스는 다시 계산하지 않고 traceparent flags를 따른다 (ParentBased)'],
+[10.5,'결과는 대략 25%. 단, 에러 여부를 모르는 시작 시점의 결정이다']],
+cfg:'OTEL_TRACES_SAMPLER=parentbased_traceidratio<br>OTEL_TRACES_SAMPLER_ARG=0.25<br>Python SDK: (trace_id &amp; 2^64−1) &lt; 0.25 × 2^64',
+draw(g,t){const C=g.C,R=.25,seen=HEAD.filter(h=>h.at<=t),cur=seen[seen.length-1];
+  const k=seen.filter(h=>h.v<R).length;
+  g.text(`sampled ${k} / ${seen.length}`,930,34,{align:'right',mono:true,size:14,w:600,color:C.trace});
+  if(cur){g.text('trace_id',30,34,{size:12,color:C.muted});const hi=cur.hex.slice(0,16),lo=cur.hex.slice(16);
+    g.text(hi,100,34,{mono:true,size:16,color:C.muted});const w=g.mw(hi,{mono:true,size:16});g.text(lo,100+w,34,{mono:true,size:16,color:C.accent,w:600});
+    g.text('↑ 하위 64비트',100+w,56,{size:11,color:C.accent});
+    const keep=cur.v<R;g.text(`→ ${cur.v.toFixed(4)} ${keep?'<':'≥'} 0.25  ⇒  ${keep?'sampled (flags 01)':'버림 (flags 00)'}`,100,86,{size:15,mono:true,w:600,color:keep?C.ok:C.muted});}
+  const X=v=>80+v*800,LY=196;
+  g.box(X(0),LY-34,X(R)-X(0),34,{r:0,fill:alpha(C.ok,.12)});g.text('sampled 구간',X(0)+8,LY-44,{size:12,color:C.ok,w:600});
+  g.line(X(0),LY,X(1),LY,{color:C.fg,lw:1.5});
+  [0,.25,.5,.75,1].forEach(v=>{g.line(X(v),LY,X(v),LY+6,{color:C.fg});g.text(String(v),X(v),LY+18,{align:'center',size:12,mono:true,color:C.muted});});
+  seen.forEach((h,i)=>{const p=ease(seg(t,h.at,h.at+.35)),y=lerp(118,LY-7-(i%3)*9,p),isCur=h===cur;
+    g.dot(X(h.v),y,isCur?7:5,h.v<R?C.trace:alpha(C.muted,.6),isCur?C.fg:null,1.5);});
+  if(!cur)return;
+  const keep=cur.v<R,flag=keep?'01':'00';
+  g.text('ParentBased: 하위 서비스는 부모 결정을 그대로 따른다',30,262,{size:13,color:C.muted});
+  const B=[['gateway','루트 · ratio로 결정'],['order','ParentBased → 부모 따름'],['payment','ParentBased → 부모 따름']];
+  B.forEach((b,i)=>{const x=60+i*310;g.box(x,286,220,92,{fill:keep?alpha(C.trace,.14):C.surface,stroke:keep?C.trace:C.line,dash:keep?[]:[5,4]});
+    g.text(b[0],x+16,310,{w:600,size:15});g.text(b[1],x+16,334,{size:12,color:C.muted});
+    g.text(keep?'recording → export':'non-recording → 전송 안 함',x+16,358,{size:12,mono:true,color:keep?C.trace:C.muted});
+    if(i<2){g.arrow(x+222,332,x+306,332,{color:keep?C.trace:C.muted});g.text('…-'+flag,x+264,318,{align:'center',size:12,mono:true,color:keep?C.trace:C.muted,w:600});}});
+  g.text('같은 trace_id면 어느 서비스가 계산해도 결과가 같다. 그래서 트레이스가 중간에 끊기지 않는다.',30,420,{size:13,color:C.muted});
+  if(t>=10.5)g.text(`최종 ${k}/${HEAD.length} = ${(k/HEAD.length*100).toFixed(0)}%  (표본이 작아 25%에서 조금 벗어남)`,30,452,{size:14,w:600,color:C.trace});
+}};
+
+/* 4. tail sampling */
+const TAIL=[{id:'7a1c…',sp:[.3,.55,.8],tag:'200 · 120ms',keep:0,why:'어느 정책에도 해당 없음'},
+{id:'be6b…',sp:[1,1.3,1.6,2.1],tag:'500 · 310ms',keep:1,why:'status_code = ERROR',err:1},
+{id:'3f09…',sp:[2,2.5,3.4],tag:'200 · 820ms',keep:1,why:'latency > 500ms'},
+{id:'d412…',sp:[3,3.25],tag:'200 · 80ms',keep:0,why:'어느 정책에도 해당 없음'},
+{id:'91e7…',sp:[4,4.3,4.5],tag:'200 · 95ms',keep:1,why:'probabilistic 10% 당첨'}];
+const WAIT=5;
+SC.tail={dur:12,
+steps:[[0,'gateway Collector가 trace_id별로 span을 모은다. 아직 아무것도 내보내지 않는다'],
+[1.0,'decision_wait 동안 늦게 도착하는 span을 기다린다 (막대 = 대기 시간)'],
+[5.3,'대기가 끝난 트레이스부터 정책을 평가. 하나라도 sampled면 keep'],
+[6.0,'에러가 난 트레이스는 정상 트레이스보다 훨씬 드물어도 빠짐없이 남는다'],
+[7.0,'느린 트레이스도 latency 정책으로 남는다'],
+[9.0,'나머지 정상 트레이스는 확률 정책으로 일부만 남긴다']],
+cfg:'tail_sampling:<br>&nbsp;&nbsp;decision_wait: 10s (그림 5s)<br>&nbsp;&nbsp;policies: status_code,<br>&nbsp;&nbsp;latency(500ms), probabilistic(10%)<br>앞단: loadbalancing exporter<br>(routing_key: traceID)',
+draw(g,t){const C=g.C;
+  g.text('trace_id',30,26,{size:12,color:C.muted});g.text('버퍼 (span 대기)',190,26,{size:12,color:C.muted});g.text('정책 평가',560,26,{size:12,color:C.muted});g.text('결과',810,26,{size:12,color:C.muted});
+  TAIL.forEach((tr,i)=>{const y=46+i*78,st=tr.sp[0],dec=t>=st+WAIT,started=t>=st;
+    g.box(20,y,920,64,{fill:dec&&tr.keep?alpha(tr.err?C.bad:C.trace,.08):C.surface,stroke:C.line,lw:1});
+    g.text(tr.id,34,y+22,{mono:true,size:14,w:600,color:started?C.fg:C.muted});
+    if(dec)g.text(tr.tag,34,y+44,{mono:true,size:12,color:tr.err?C.bad:C.muted});
+    tr.sp.forEach((a,j)=>{if(t<a)return;const p=ease(seg(t,a,a+.3)),x=lerp(150,190+j*52,p);
+      g.alpha(dec&&!tr.keep?.3:1,()=>g.box(x,y+12,44,20,{r:4,fill:alpha(tr.err&&j===3?C.bad:C.trace,.6),stroke:tr.err&&j===3?C.bad:C.trace,lw:1}));});
+    if(started){const p=seg(t,st,st+WAIT);g.box(190,y+44,320,6,{r:3,fill:C.surface2});g.box(190,y+44,Math.max(6,320*p),6,{r:3,fill:dec?C.muted:C.accent});
+      if(!dec)g.text(`${(st+WAIT-t).toFixed(1)}s`,520,y+47,{size:11,mono:true,color:C.muted});}
+    if(dec){const a=seg(t,st+WAIT,st+WAIT+.4);g.alpha(a,()=>{g.text(tr.why,560,y+32,{size:13,w:tr.keep?600:400,color:tr.keep?(tr.err?C.bad:C.ok):C.muted});
+      if(tr.keep)g.chip('keep → Tempo',810,y+32,{color:C.fg,stroke:C.ok,w:600});else g.chip('drop',810,y+32,{color:C.muted});});}});
+  g.text('정책 순서와 무관하게 하나라도 sampled면 keep. 결정 전까지 모든 span이 메모리에 머문다.',30,452,{size:13,color:C.muted});
+}};
+
+/* 5. histogram + temporality + exemplar */
+const HV=[.032,.07,.21,.045,.12,.018,.09,.31,.06,.15,.04,.82,.11,.027,.23,.055,.48,.08];
+const HB=[.05,.1,.25,.5,1,Infinity],HL=['≤0.05','≤0.1','≤0.25','≤0.5','≤1','+Inf'];
+const HAT=HV.map((v,i)=>.3+i*.52),HEXP=[3.5,7,10.5],HBK=HV.map(v=>HB.findIndex(b=>v<=b));
+SC.histogram={dur:13,
+steps:[[0,'Histogram.record(v): v가 들어갈 버킷 카운트 +1, sum·count 갱신. 원본 값은 버린다'],
+[3.5,'수집 주기마다 MetricReader가 집계 상태를 꺼내 export'],
+[6.0,'느린 요청 기록 순간, 활성 span의 trace_id가 exemplar로 버킷에 붙는다'],
+[7.0,'Cumulative는 시작부터 누적, Delta는 이번 주기 증가분만'],
+[10.5,'Prometheus는 cumulative를 기대한다. delta를 쓰는 백엔드도 있다']],
+cfg:'OTEL_METRIC_EXPORT_INTERVAL=60000 (그림 3.5s)<br>버킷: View로 변경<br>OTEL_METRICS_EXEMPLAR_FILTER=trace_based',
+draw(g,t){const C=g.C,done=HV.map((v,i)=>t>=HAT[i]+.45),cnt=HB.map((b,k)=>HV.filter((v,i)=>done[i]&&HBK[i]===k).length);
+  const n=done.filter(Boolean).length,sum=HV.reduce((s,v,i)=>s+(done[i]?v:0),0);
+  g.text(`count ${n} · sum ${sum.toFixed(3)}s`,30,30,{mono:true,size:14,w:600});
+  g.text('http.server.request.duration (Histogram)',30,52,{size:12,color:C.muted,mono:true});
+  const bx=k=>50+k*76,base=400,bh=26;
+  HB.forEach((b,k)=>{g.box(bx(k),base-Math.max(2,cnt[k]*bh),56,Math.max(2,cnt[k]*bh),{r:3,fill:alpha(C.metric,.55),stroke:C.metric,lw:1});
+    g.text(HL[k],bx(k)+28,base+16,{align:'center',size:12,mono:true,color:C.muted});if(cnt[k])g.text(String(cnt[k]),bx(k)+28,base-cnt[k]*bh-12,{align:'center',size:13,mono:true,w:600});});
+  g.line(40,base,520,base,{color:C.fg});
+  HV.forEach((v,i)=>{const a=HAT[i];if(t<a||t>=a+.45)return;const p=ease(seg(t,a,a+.45)),k=HBK[i],before=HV.filter((w,j)=>j<i&&HBK[j]===k).length;
+    const x=lerp(280,bx(k)+28,p),y=lerp(90,base-before*bh-10,p);g.dot(x,y,7,C.metric);g.text(v+'s',x+12,y,{mono:true,size:13,w:600,color:C.metric});});
+  if(done[11]){const k=HBK[11],x=bx(k)+28,y=base-cnt[k]*bh-34;g.ctx.save();g.ctx.translate(x,y);g.ctx.rotate(Math.PI/4);g.box(-6,-6,12,12,{r:1,fill:C.trace});g.ctx.restore();
+    g.text('exemplar trace_id=be6b98dd…',x-8,y-20,{align:'right',size:12,mono:true,color:C.trace,w:600});}
+  g.line(550,20,550,470,{color:C.line});
+  const cum=HEXP.map(e=>HV.filter((v,i)=>HAT[i]+.45<=e).length),del=cum.map((c,i)=>c-(i?cum[i-1]:0));
+  const panel=(y0,title,vals,col)=>{g.text(title,580,y0,{size:13,w:600});g.line(580,y0+170,930,y0+170,{color:C.fg,lw:1});
+    HEXP.forEach((e,i)=>{const x=610+i*110;g.text(`#${i+1}`,x+25,y0+184,{align:'center',size:11,mono:true,color:C.muted});if(t<e)return;
+      const h=vals[i]*7,flash=t-e<.6;g.box(x,y0+170-h,50,h,{r:3,fill:alpha(col,flash?.9:.5),stroke:col,lw:1});g.text(String(vals[i]),x+25,y0+160-h,{align:'center',mono:true,size:13,w:600});});};
+  panel(34,'Cumulative: 매 export가 누적 count',cum,C.metric);
+  panel(258,'Delta: 매 export가 그 주기 증가분',del,C.accent);
+  const fl=HEXP.find(e=>t>=e&&t-e<.8);if(fl)g.chip('export!',930,26,{align:'right',color:C.fg,stroke:C.metric});
+}};
+
+/* 6. cardinality */
+const CARD=[['http.request.method','4가지',4],['× http.response.status_code','5가지',20],['× http.route','12개',240],['× service.instance.id','파드 3개',720],['× 히스토그램 버킷','15개',10800],['× user.id','5만 명',540000000]];
+SC.cardinality={dur:11,
+steps:[[0,'시계열 하나 = 메트릭 이름 + attribute 값 조합 하나'],
+[2.1,'attribute를 추가할 때마다 값의 개수만큼 곱해진다'],
+[6.9,'히스토그램은 버킷마다 시계열이 따로 생긴다'],
+[8.5,'고유값 attribute 하나로 수억 개. 메모리·쿼리 비용이 폭발한다'],
+[10,'고유값은 span이나 log attribute로 보낸다. 메트릭에서는 View나 Collector에서 제거']],
+cfg:'View(attribute_keys={…})<br>Collector: attributes / transform<br>Prometheus: sample_limit, label_limit',
+draw(g,t){const C=g.C,X=n=>300+Math.log10(Math.max(1,n))/9*600;
+  [[1,'1'],[1e3,'1천'],[1e6,'100만'],[1e9,'10억']].forEach(([v,l])=>{g.line(X(v),40,X(v),430,{color:C.line,dash:[2,4],lw:1});g.text(l,X(v),28,{align:'center',size:12,mono:true,color:C.muted});});
+  CARD.forEach((c,i)=>{const a=.5+i*1.6;if(t<a)return;const y=60+i*62,p=ease(seg(t,a,a+.8)),bad=i===5;
+    const val=Math.round(Math.pow(10,Math.log10(c[2])*p));
+    g.text(c[0],20,y+10,{size:13,w:600,mono:true,color:bad?C.bad:C.fg});g.text(c[1],20,y+30,{size:12,color:C.muted});
+    const w=Math.max(4,(X(val)-300));g.box(300,y+4,w,32,{r:4,fill:alpha(bad?C.bad:C.metric,.6),stroke:bad?C.bad:C.metric,lw:1});
+    const lab=val.toLocaleString('ko-KR')+' 시계열';const lw=g.mw(lab,{size:13,mono:true,w:600});
+    if(300+w+8+lw<950)g.text(lab,300+w+8,y+20,{size:13,mono:true,w:600,color:bad?C.bad:C.fg});else g.text(lab,300+w-8,y+20,{align:'right',size:13,mono:true,w:600,color:C.bg});});
+  if(t>=10)g.text('→ user.id, request_id 같은 고유값은 메트릭 attribute에 넣지 않는다',20,468,{size:14,w:600,color:C.bad});
+}};
+
+/* 7. profiles */
+const STK=[[['main','handle_request','json.dumps'],.25],[['main','handle_request','db.query','socket.recv'],.2],[['main','handle_request','checksum'],.35],[['main','handle_request','db.query','pool.acquire'],.08],[['main','gc.collect'],.12]];
+const PS=(()=>{const r=rng(5),o=[];for(let i=0;i<64;i++){let x=r(),k=0;while(k<STK.length-1&&x>STK[k][1]){x-=STK[k][1];k++;}o.push({at:.4+i*.15,k});}return o;})();
+SC.profiles={dur:12,
+steps:[[0,'프로파일러가 일정 주기로 실행 중인 콜 스택을 통째로 기록한다 (함수 진입마다 기록하지 않음)'],
+[2.5,'같은 스택은 합산해 개수만 센다. pprof 기반 데이터 모델이 스택·함수 테이블을 중복 제거'],
+[6.0,'flame graph: 위가 호출자, 아래가 피호출자. 너비 = 그 함수가 스택에 있던 샘플 비율'],
+[10.0,'가장 넓은 리프가 CPU를 가장 많이 쓴 곳. 샘플에 trace_id를 붙이면 느린 span과 연결된다']],
+cfg:'Collector: profiles 신호 (Development)<br>eBPF 프로파일러: 코드 수정 없이<br>시스템 전체 스택 샘플링',
+draw(g,t){const C=g.C,got=PS.filter(s=>s.at<=t),last=got[got.length-1];
+  g.text(`샘플 ${got.length}개`,30,30,{mono:true,size:14,w:600,color:C.profile});
+  g.line(30,56,220,56);got.forEach((s,i)=>{const x=30+(i%64)*2.95;g.line(x,50,x,62,{color:t-s.at<.2?C.profile:alpha(C.profile,.4),lw:1.5});});
+  g.text('현재 스택 스냅샷',30,90,{size:12,color:C.muted});
+  if(last){const st=STK[last.k][0],fr=clamp((t-last.at)/.15,0,1);st.forEach((f,j)=>{const y=390-j*36;g.alpha(t-last.at<.12?1:.85,()=>{g.box(30,y,190,30,{r:4,fill:alpha(C.profile,.18+j*.12),stroke:C.profile,lw:1});g.text(f,42,y+15,{size:13,mono:true});});});
+    g.text('↑ 스택 꼭대기 = 지금 실행 중',30,420+0*fr,{size:11,color:C.muted});}
+  g.line(250,20,250,470,{color:C.line});
+  g.text('flame graph (너비 = 샘플 수)',270,30,{size:13,w:600});
+  const root={n:'all',c:0,ch:{}};got.forEach(s=>{let node=root;node.c++;STK[s.k][0].forEach(f=>{node.ch[f]=node.ch[f]||{n:f,c:0,ch:{}};node=node.ch[f];node.c++;});});
+  if(!root.c)return;const lastPath=last?STK[last.k][0]:[];
+  const lay=(node,x,w,d,onPath)=>{const y=60+d*44;const hot=onPath&&t-last.at<.25;
+    g.box(x+1,y,Math.max(1,w-2),38,{r:3,fill:alpha(C.profile,.14+Math.min(d,4)*.1),stroke:hot?C.fg:alpha(C.profile,.7),lw:hot?2:1});
+    if(w>70){g.text(node.n,x+8,y+14,{size:12.5,mono:true,w:600});g.text(`${node.c} (${Math.round(node.c/root.c*100)}%)`,x+8,y+30,{size:11,mono:true,color:C.muted});}
+    let cx=x;Object.keys(node.ch).sort().forEach(k=>{const ch=node.ch[k],cw=w*ch.c/node.c;lay(ch,cx,cw,d+1,onPath&&lastPath[d]===k);cx+=cw;});};
+  lay(root,270,670,0,true);
+  if(t>=10){g.text('checksum이 가장 넓은 리프 → 최적화 1순위',270,300+0,{size:14,w:600,color:C.profile});}
+}};
+
+/* 8. collector pipeline */
+const LANES=[{n:'traces',y:120,c:'trace',rc:'otlp',ex:'otlp',be:'Tempo'},{n:'metrics',y:240,c:'metric',rc:'otlp · prometheus',ex:'prometheusremotewrite',be:'Prometheus'},{n:'logs',y:360,c:'log',rc:'filelog',ex:'otlphttp',be:'Loki'}];
+const PK=(()=>{const o=[];LANES.forEach((L,li)=>{for(let s=.1+li*.18;s<11;s+=.55)o.push({li,s,ref:s>=7.6&&s<8.8});});
+  o.forEach(p=>{p.ab=p.s+(480-150)/220;p.fl=Math.ceil((p.ab+1e-6)/2)*2;});
+  o.forEach(p=>{p.idx=o.filter(q=>!q.ref&&q.li===p.li&&q.fl===p.fl&&q.ab<p.ab).length;});return o;})();
+SC.collector={dur:12,
+steps:[[0,'receiver: OTLP·filelog·prometheus 등으로 받아 내부 형식(pdata)으로 변환'],
+[1.0,'memory_limiter: 첫 processor. 메모리 한도를 넘으면 수신을 거부해 상류가 재시도하게 한다'],
+[1.6,'k8s_attributes: 송신 파드를 찾아 k8s.* 속성을 Resource에 추가 (점 테두리)'],
+[2.0,'batch: 일정 크기나 시간이 되면 묶어서 다음으로 넘긴다'],
+[3.0,'exporter: 신호별 백엔드로 전송. 한 파이프라인이 여러 exporter로 fan-out도 가능'],
+[7.6,'메모리 급증 구간: memory_limiter가 새 데이터를 거부 (빨간 점)']],
+cfg:'service.pipelines:<br>&nbsp;&nbsp;traces: [otlp] → [memory_limiter,<br>&nbsp;&nbsp;&nbsp;&nbsp;k8s_attributes, batch] → [otlp]<br>권장 순서: memory_limiter 맨 앞,<br>batch는 샘플링·필터 뒤',
+draw(g,t){const C=g.C;
+  const P=[['memory_limiter',200,290],['k8s_attributes',330,440],['batch',480,590]];
+  P.forEach(([n,a,b])=>{g.box(a,64,b-a,346,{fill:C.surface2,stroke:C.line});g.text(n,(a+b)/2,50,{align:'center',size:12,mono:true,w:600});});
+  const mem=t<7.4?40+Math.sin(t*1.3)*6:t<8.2?lerp(46,94,seg(t,7.4,8.2)):lerp(94,45,seg(t,8.8,9.8));
+  g.box(208,420,74,8,{r:4,fill:C.line});g.box(208,420,74*mem/100,8,{r:4,fill:mem>80?C.bad:C.ok});g.line(208+74*.8,416,208+74*.8,432,{color:C.fg,lw:1});
+  g.text(`mem ${Math.round(mem)}%`,245,446,{align:'center',size:11,mono:true,color:mem>80?C.bad:C.muted});
+  g.text('flush',535,434,{align:'center',size:11,color:C.muted});const nf=Math.ceil(t/2)*2;g.text(`다음 ${(nf-t).toFixed(1)}s`,535,450,{align:'center',size:11,mono:true,color:C.muted});
+  LANES.forEach(L=>{const col=C[L.c];g.box(20,L.y-26,120,52,{fill:alpha(col,.1),stroke:col});g.text(L.rc,80,L.y-6,{align:'center',size:11.5,mono:true,w:600});g.text(L.n,80,L.y+12,{align:'center',size:11,color:C.muted});
+    g.box(650,L.y-26,130,52,{fill:alpha(col,.1),stroke:col});g.text(L.ex,715,L.y,{align:'center',size:L.ex.length>14?9.5:11.5,mono:true,w:600});
+    g.box(820,L.y-26,120,52,{fill:C.surface2,stroke:C.line});g.text(L.be,880,L.y,{align:'center',w:600});
+    g.line(140,L.y,650,L.y,{color:alpha(col,.35),lw:1});g.arrow(780,L.y,816,L.y,{color:alpha(col,.6)});});
+  PK.forEach(p=>{if(t<p.s)return;const L=LANES[p.li],col=C[L.c];let x,ex=false;
+    if(p.ref){const xa=Math.min(200,150+(t-p.s)*220);if(t-p.s>(200-150)/220+.8)return;x=xa;if(xa>=200){g.dot(x-6,L.y,6,C.bad);g.text('×',x-6,L.y-16,{align:'center',color:C.bad,w:700});return;}g.dot(x,L.y,6,col);return;}
+    const sx=590-p.idx*14;
+    if(t<p.ab)x=150+(t-p.s)*220;else if(t<p.fl)x=Math.max(490,lerp(480,sx,seg(t,p.ab,p.ab+.3)));else{x=sx+(t-p.fl)*260;ex=true;}
+    if(x>830)return;const tagged=x>385;g.dot(x,L.y,6,col,tagged?C.fg:null,1.5);});
+}};
+
+/* 9. scrape */
+const TG=[{n:'pod-a',y:50,from:0,down:99},{n:'pod-b',y:160,from:0,down:7},{n:'pod-c',y:270,from:5,down:99}];
+const STS=[.5,2.5,4.5,6.5,8.5,10.5];
+SC.scrape={dur:12.2,
+steps:[[0,'Prometheus가 scrape_interval마다 각 대상의 /metrics를 GET (pull)'],
+[1.0,'응답은 텍스트 형식의 현재 값. 받은 시각을 타임스탬프로 TSDB에 저장'],
+[4.6,'service discovery가 Kubernetes API에서 새 파드를 찾아 대상에 추가'],
+[7.0,'pod-b 장애'],
+[8.5,'응답이 없으면 up=0을 기록. "죽었다"는 사실 자체가 데이터가 된다'],
+[10.5,'반대로 OTLP는 앱이나 Collector가 push. Prometheus는 /api/v1/otlp로 받을 수 있다']],
+cfg:'scrape_interval: 15s (그림 2s)<br>kubernetes_sd_configs: role pod<br>알람 예: up == 0 for 1m',
+draw(g,t){const C=g.C;
+  g.box(40,30,170,56,{fill:C.surface2,stroke:t>=4.6&&t<5.6?C.accent:C.line});g.text('service discovery',125,50,{align:'center',size:12.5,w:600});g.text('k8s API watch',125,68,{align:'center',size:11,color:C.muted,mono:true});
+  g.box(40,150,170,110,{fill:alpha(C.metric,.1),stroke:C.metric,lw:2});g.text('Prometheus',125,186,{align:'center',w:700,size:16});g.text('scrape loop',125,210,{align:'center',size:12,mono:true,color:C.muted});
+  g.arrow(125,88,125,146,{color:t>=4.6&&t<5.6?C.accent:C.line});if(t>=4.6&&t<6)g.chip('+ pod-c',140,118,{color:C.accent,stroke:C.accent,mono:true});
+  TG.forEach(T=>{const vis=t>=T.from,dn=t>=T.down;
+    g.alpha(vis?1:.35,()=>{g.box(700,T.y,200,62,{fill:dn?alpha(C.bad,.1):C.surface,stroke:dn?C.bad:C.line,dash:vis?[]:[5,4]});
+      g.text(T.n,716,T.y+22,{w:600,mono:true});g.text(dn?'crash · 응답 없음':vis?':8080/metrics':'아직 모름',716,T.y+44,{size:12,mono:true,color:dn?C.bad:C.muted});});
+    STS.forEach(ts=>{if(ts<T.from||t<ts||t>ts+1.2)return;const ty=T.y+31,fail=ts>=T.down;
+      if(t<ts+.55){const p=ease(seg(t,ts,ts+.55));g.dot(lerp(212,698,p),lerp(205,ty,p),5,C.metric);if(p<.3)g.text('GET',212,190,{size:11,mono:true,color:C.metric});}
+      else if(!fail){const p=ease(seg(t,ts+.55,ts+1.1));g.dot(lerp(698,212,p),lerp(ty,205,p),6,C.ok);}
+      else g.text('timeout',690,ty,{align:'right',size:12,color:C.bad,w:700});});});
+  g.text('TSDB',40,330,{size:12,color:C.muted});
+  TG.forEach((T,i)=>{const y=362+i*34;g.text(`up{pod="${T.n}"}`,40,y,{size:12.5,mono:true});
+    STS.forEach((ts,k)=>{const x=290+k*104;if(t<ts+1.1||ts<T.from){g.dot(x,y,4,null,C.line,1);return;}const up=ts<T.down;
+      g.dot(x,y,8,up?C.ok:C.bad);g.text(up?'1':'0',x,y+.5,{align:'center',size:10,mono:true,w:700,color:C.bg});});});
+  STS.forEach((ts,k)=>g.text(`t${k+1}`,290+k*104,466,{align:'center',size:11,mono:true,color:C.muted}));
+}};
+
+/* 10. rate */
+const RV=[100,130,165,190,20,55,90,120,150,185,210,240];
+const rk=t=>clamp(3+Math.floor(Math.max(0,t-1)/1.2),3,11);
+SC.rate={dur:12,
+steps:[[0,'Counter 원값은 계속 커질 뿐이라 그 자체로는 의미가 적다. 증가 속도를 본다'],
+[1.0,'rate(x[1m]): 창 안 샘플의 증가량 ÷ 시간'],
+[2.2,'값이 줄었다 = 프로세스 재시작으로 0부터 다시 셈. 줄어든 지점의 값을 증가분으로 더한다'],
+[6.0,'창이 지나가면 rate는 다시 평소 기울기로'],
+[10.0,'실제 Prometheus는 창 경계까지 외삽도 한다. 그래서 정수 카운터의 increase()가 소수로 나온다']],
+cfg:'scrape 간격 15s · 창 [1m]<br>rate = 초당 증가율<br>increase = rate × 창 길이',
+draw(g,t){const C=g.C,X=i=>90+i*72,Y=v=>420-v*1.15,k=rk(t),a=k-3;
+  g.box(X(a)-22,Y(260),X(k)-X(a)+44,Y(0)-Y(260)+8,{r:6,fill:alpha(C.accent,.08),stroke:C.accent,lw:1.2});
+  g.text('[1m] 창',X(a)-14,Y(260)+14,{size:12,color:C.accent,w:600});
+  g.line(70,Y(0),920,Y(0),{color:C.fg,lw:1});[0,100,200].forEach(v=>{g.text(String(v),62,Y(v),{align:'right',size:11,mono:true,color:C.muted});g.line(70,Y(v),920,Y(v),{color:C.line,dash:[2,4],lw:1});});
+  for(let i=1;i<RV.length;i++){const rs=RV[i]<RV[i-1];g.line(X(i-1),Y(RV[i-1]),X(i),Y(RV[i]),{color:rs?C.bad:C.metric,lw:2,dash:rs?[4,4]:[]});}
+  RV.forEach((v,i)=>{const rs=i>0&&v<RV[i-1];g.dot(X(i),Y(v),rs?7:5,rs?C.bad:C.metric);g.text(String(v),X(i),Y(v)-16,{align:'center',size:11,mono:true,color:i>=a&&i<=k?C.fg:C.muted});g.text(`${i*15}s`,X(i),Y(0)+16,{align:'center',size:10.5,mono:true,color:C.muted});});
+  g.text('재시작 → 0부터',X(4)+10,Y(20)+20,{size:12,color:C.bad,w:600});
+  let inc=0;const parts=[];for(let i=a+1;i<=k;i++){const d=RV[i]>=RV[i-1]?RV[i]-RV[i-1]:RV[i];inc+=d;parts.push(RV[i]>=RV[i-1]?`+${d}`:`+${d}(reset)`);}
+  const span=45,naive=RV[k]-RV[a],hasReset=parts.some(p=>p.includes('reset'));
+  g.text(`증가량 = ${parts.join(' ')} = ${inc}`,30,30,{size:14,mono:true,w:600});
+  g.text(`rate ≈ ${inc} / ${span}s = ${(inc/span).toFixed(2)} /s`,30,56,{size:15,mono:true,w:700,color:C.metric});
+  g.text(`보정 없이 (마지막−처음)/${span}s = ${(naive/span).toFixed(2)} /s`,520,56,{size:13,mono:true,color:naive<0?C.bad:C.muted,w:naive<0?600:400});
+  if(hasReset)g.chip('창 안에 reset 있음',930,30,{align:'right',color:C.bad,stroke:C.bad});
+}};
+
+/* 11. histogram_quantile */
+const QB=[.05,.1,.25,.5,1],QC=[40,70,92,98,100,100];
+SC.quantile={dur:11.5,
+steps:[[0,'입력: 버킷별 누적 카운트 (le = 이하). 보통 rate()를 먼저 씌운 값'],
+[2.4,'순위 = 0.95 × 전체(100) = 95번째'],
+[4.4,'누적이 처음으로 95 이상이 되는 버킷을 찾는다: le=0.5 (92 → 98)'],
+[6.4,'버킷 안은 값이 고르게 퍼져 있다고 가정하고 선형 보간'],
+[9.0,'p95 ≈ 0.375s. 실제 값은 0.25~0.5 사이 어디든 될 수 있다']],
+cfg:'histogram_quantile(0.95,<br>&nbsp;&nbsp;sum by (le) (<br>&nbsp;&nbsp;&nbsp;&nbsp;rate(..._bucket[5m])))',
+draw(g,t){const C=g.C,X=j=>110+j*128,Y=c=>420-c*3.1;
+  g.line(100,Y(0),900,Y(0),{color:C.fg,lw:1});[0,50,100].forEach(v=>{g.text(String(v),92,Y(v),{align:'right',size:11,mono:true,color:C.muted});g.line(100,Y(v),900,Y(v),{color:C.line,dash:[2,4],lw:1});});
+  ['0','0.05','0.1','0.25','0.5','1','+Inf'].forEach((l,j)=>g.text(l,X(j),Y(0)+18,{align:'center',size:12,mono:true,color:C.muted}));
+  g.text('le (초)',900,Y(0)+38,{align:'right',size:11,color:C.muted});
+  const shown=Math.floor(seg(t,0,2.2)*6+1e-9);
+  const pts=[[X(0),Y(0)]];for(let j=0;j<6;j++)pts.push([X(j+1),Y(QC[j])]);
+  for(let j=0;j<shown;j++){g.box(X(j+1)-14,Y(QC[j]),28,Y(0)-Y(QC[j]),{r:3,fill:alpha(C.metric,.25),stroke:alpha(C.metric,.7),lw:1});g.text(String(QC[j]),X(j+1),Y(QC[j])-12,{align:'center',size:12,mono:true,w:600});}
+  g.ctx.beginPath();g.ctx.moveTo(pts[0][0],pts[0][1]);for(let j=1;j<=shown;j++)g.ctx.lineTo(pts[j][0],pts[j][1]);g.ctx.strokeStyle=C.metric;g.ctx.lineWidth=2;g.ctx.stroke();
+  if(t>=2.4){const p=seg(t,2.4,3.6);g.line(100,Y(95),lerp(100,900,p),Y(95),{color:C.accent,lw:1.5,dash:[6,4]});g.text('rank 95',104,Y(95)-12,{size:12,color:C.accent,w:600,mono:true});}
+  if(t>=4.4){g.alpha(seg(t,4.4,5),()=>{g.box(X(4),Y(100)-10,X(5)-X(4),Y(0)-Y(100)+10,{r:0,fill:alpha(C.accent,.08)});g.text('92 < 95 ≤ 98',(X(4)+X(5))/2,Y(100)-22,{align:'center',size:12.5,mono:true,w:600,color:C.accent});});}
+  if(t>=6.4){const p=ease(seg(t,6.4,8.4)),fx=95-92,x=lerp(X(4),X(4)+(X(5)-X(4))*fx/6,p),y=lerp(Y(92),Y(95),p);
+    g.line(X(4),Y(92),X(5),Y(98),{color:C.accent,lw:3});g.dot(x,y,7,C.accent);
+    if(t>=8.4){g.line(x,y,x,Y(0),{color:C.accent,lw:1.5,dash:[3,3]});g.chip('0.375s',x,Y(0)-14,{align:'center',mono:true,w:700,color:C.fg,stroke:C.accent});}}
+  const f='0.25 + (0.5 − 0.25) × (95 − 92) / (98 − 92) = 0.375';
+  if(t>=6.4)g.text(f,30,30,{size:14,mono:true,w:600,color:t>=8.4?C.fg:C.muted});
+  else g.text('histogram_quantile(0.95, …)',30,30,{size:14,mono:true,w:600,color:C.muted});
+  if(t>=9)g.text('버킷 경계가 곧 정확도. SLO 기준값(예: 0.3s)에 경계를 두면 판정이 정확해진다',30,58,{size:13,color:C.muted});
+}};
+
+/* ───────────── player ───────────── */
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+class Player{
+  constructor(stage,scene,name){this.stage=stage;this.sc=scene;this.cv=stage.querySelector('canvas');this.ctx=this.cv.getContext('2d');this.t=0;this.playing=false;this.speed=1;
+    const c=document.createElement('div');c.className='ctrl';
+    c.innerHTML=`<button type="button" class="pp" aria-label="재생">▶</button><button type="button" class="rs" aria-label="처음부터">↺</button><input type="range" id="scrub-${name}" min="0" max="1000" value="0" aria-label="타임라인"><button type="button" class="sp" aria-label="재생 속도">1×</button><span class="time"></span>`;
+    stage.appendChild(c);this.pp=c.querySelector('.pp');this.rg=c.querySelector('input');this.tm=c.querySelector('.time');this.spb=c.querySelector('.sp');
+    this.pp.onclick=()=>this.playing?this.pause():this.play();
+    c.querySelector('.rs').onclick=()=>{this.t=0;this.play();};
+    this.spb.onclick=()=>{this.speed=this.speed===1?.5:this.speed===.5?2:1;this.spb.textContent=this.speed+'×';};
+    this.rg.oninput=()=>{this.pause();this.t=this.rg.value/1000*this.sc.dur;this.draw();};
+    const aside=stage.closest('.anim').querySelector('.steps');
+    aside.innerHTML=`<h3>단계</h3><ol>${scene.steps.map(([s,txt])=>`<li><button type="button" data-t="${s}"><span class="ts">${s.toFixed(1)}s</span><span>${txt}</span></button></li>`).join('')}</ol>${scene.cfg?`<div class="cfg">${scene.cfg}</div>`:''}`;
+    this.lis=[...aside.querySelectorAll('li')];
+    aside.querySelectorAll('button').forEach(b=>b.onclick=()=>{this.t=+b.dataset.t+.001;this.play();});
+  }
+  play(){if(this.t>=this.sc.dur-.01)this.t=0;this.playing=true;this.sync();}
+  pause(){this.playing=false;this.sync();}
+  sync(){this.pp.textContent=this.playing?'❚❚':'▶';this.pp.setAttribute('aria-label',this.playing?'정지':'재생');}
+  resize(){const r=this.cv.getBoundingClientRect();if(!r.width)return;const d=window.devicePixelRatio||1;this.cv.width=Math.round(r.width*d);this.cv.height=Math.round(r.width*H/W*d);this.draw();}
+  draw(){if(!this.cv.width)return;const k=this.cv.width/W,ctx=this.ctx;ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,this.cv.width,this.cv.height);ctx.setTransform(k,0,0,k,0,0);ctx.globalAlpha=1;
+    try{this.sc.draw(kit(ctx,colors()),this.t);}catch(e){console.error(e);}
+    this.rg.value=Math.round(this.t/this.sc.dur*1000);this.tm.textContent=`${this.t.toFixed(1)}s / ${this.sc.dur}s`;
+    let cur=0;this.sc.steps.forEach(([s],i)=>{if(this.t>=s)cur=i;});this.lis.forEach((li,i)=>li.classList.toggle('now',i===cur));}
+}
+
+/* ───────────── deck ───────────── */
+const slides=[...document.querySelectorAll('.slide')],players=new Map();
+slides.forEach(s=>{const st=s.querySelector('.stage');if(st){const n=st.dataset.scene;players.set(s,new Player(st,SC[n],n));}});
+const prog=document.getElementById('prog'),count=document.getElementById('count'),chap=document.getElementById('chap');
+slides.forEach((s,i)=>{const b=document.createElement('button');b.type='button';b.setAttribute('aria-label',`${i+1}. ${s.dataset.chap}`);b.title=`${i+1}. ${s.dataset.chap}`;if(players.has(s))b.classList.add('anim-s');b.onclick=()=>go(i);prog.appendChild(b);});
+const ag=document.getElementById('agenda');
+slides.forEach((s,i)=>{if(!players.has(s))return;const a=document.createElement('a');a.href=`#s-${i+1}`;a.innerHTML=`<span>${String(i+1).padStart(2,'0')}</span>${s.dataset.chap}`;a.onclick=e=>{e.preventDefault();go(i);};ag.appendChild(a);});
+let idx=-1,cur=null;
+function go(n){n=clamp(n,0,slides.length-1);if(n===idx)return;if(idx>=0)slides[idx].classList.remove('active');idx=n;const s=slides[n];s.classList.add('active');s.scrollTop=0;
+  count.textContent=`${n+1} / ${slides.length}`;chap.textContent=s.dataset.chap;
+  [...prog.children].forEach((b,i)=>{b.classList.toggle('cur',i===n);b.classList.toggle('done',i<n);});
+  try{history.replaceState(null,'',`#s-${n+1}`);}catch(e){}
+  if(cur)cur.pause();cur=players.get(s)||null;
+  if(cur){requestAnimationFrame(()=>{cur.resize();if(reduce){cur.t=cur.sc.dur;cur.draw();}else{cur.t=0;cur.play();}});}}
+document.getElementById('prev').onclick=()=>go(idx-1);document.getElementById('next').onclick=()=>go(idx+1);
+addEventListener('keydown',e=>{if(e.target.matches&&e.target.matches('input'))return;
+  if(['ArrowRight','PageDown'].includes(e.key)){e.preventDefault();go(idx+1);}
+  else if(['ArrowLeft','PageUp'].includes(e.key)){e.preventDefault();go(idx-1);}
+  else if(e.key===' '){if(e.target.tagName==='BUTTON')return;e.preventDefault();if(cur)cur.playing?cur.pause():cur.play();else go(idx+1);}
+  else if(e.key==='Home')go(0);else if(e.key==='End')go(slides.length-1);});
+let tx0=null,ty0=0;const vp=document.getElementById('vp');
+vp.addEventListener('touchstart',e=>{if(e.target.closest('.stage'))return tx0=null;tx0=e.touches[0].clientX;ty0=e.touches[0].clientY;},{passive:true});
+vp.addEventListener('touchend',e=>{if(tx0===null)return;const dx=e.changedTouches[0].clientX-tx0,dy=e.changedTouches[0].clientY-ty0;if(Math.abs(dx)>60&&Math.abs(dy)<50)go(idx+(dx<0?1:-1));tx0=null;},{passive:true});
+const fromHash=()=>{const m=/^#s-(\d+)$/.exec(location.hash);return m?+m[1]-1:0;};
+addEventListener('hashchange',()=>go(fromHash()));
+go(fromHash());
+let last=performance.now();
+function loop(ts){const dt=Math.min(.05,(ts-last)/1000);last=ts;if(cur&&cur.playing){cur.t=Math.min(cur.sc.dur,cur.t+dt*cur.speed);if(cur.t>=cur.sc.dur){cur.playing=false;cur.sync();}cur.draw();}requestAnimationFrame(loop);}
+requestAnimationFrame(loop);
+const redraw=()=>{if(cur)cur.draw();};
+new ResizeObserver(()=>{if(cur)cur.resize();}).observe(vp);
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',redraw);
+new MutationObserver(redraw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+if(document.fonts)document.fonts.ready.then(redraw);
+})();
+</script>
