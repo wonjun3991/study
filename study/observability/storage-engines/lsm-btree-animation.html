@@ -1,0 +1,667 @@
+<title>B-tree와 LSM 시뮬레이터</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: 한 열 문서. 두 시뮬레이터(B-tree, LSM/MergeTree)가 같은 틀(설명 → 조작 → 무대 → 현재 단계 → 카운터 → 로그)을 반복한다.
+   색은 동작의 의미만 표시한다: 읽기=파랑, 쓰기=주황, 분할·병합=보라, 건너뜀=회색. */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --surface2: #eceff4;
+  --fg: #172030;
+  --muted: #5a6677;
+  --line: #ccd3dd;
+  --read: #1f5fd6;
+  --read-bg: #dce7fd;
+  --write: #b8540c;
+  --write-bg: #fde6d2;
+  --merge: #6f3bd8;
+  --merge-bg: #ebe2fd;
+  --skip: #9aa5b4;
+  --found: #0f7a4a;
+  --found-bg: #d3f2e2;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e131a; --surface: #151c26; --surface2: #1c2531; --fg: #e4eaf2; --muted: #93a0b2; --line: #2c3746;
+    --read: #74a7ff; --read-bg: #1a2b48; --write: #ff9d55; --write-bg: #3a2414; --merge: #b593ff; --merge-bg: #2a1f45;
+    --skip: #5c6a7c; --found: #4fd69a; --found-bg: #133626; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e131a; --surface: #151c26; --surface2: #1c2531; --fg: #e4eaf2; --muted: #93a0b2; --line: #2c3746;
+  --read: #74a7ff; --read-bg: #1a2b48; --write: #ff9d55; --write-bg: #3a2414; --merge: #b593ff; --merge-bg: #2a1f45;
+  --skip: #5c6a7c; --found: #4fd69a; --found-bg: #133626; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.6; }
+.wrap { max-width: 1040px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 28px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; line-height: 1.3; }
+h1 { font-size: 1.85rem; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 1.3rem; font-weight: 700; }
+h3 { font-size: 1rem; font-weight: 700; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+header { display: grid; gap: 10px; }
+.lede { color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 0.85rem; color: var(--muted); align-items: center; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 14px; height: 14px; border-radius: 3px; border: 2px solid; display: inline-block; }
+.sw.read { border-color: var(--read); background: var(--read-bg); }
+.sw.write { border-color: var(--write); background: var(--write-bg); }
+.sw.merge { border-color: var(--merge); background: var(--merge-bg); }
+.sw.skip { border-color: var(--skip); background: transparent; border-style: dashed; }
+.sw.found { border-color: var(--found); background: var(--found-bg); }
+.speed { display: flex; align-items: center; gap: 10px; font-size: 0.85rem; color: var(--muted); flex-wrap: wrap; }
+.speed input { width: 160px; accent-color: var(--read); }
+
+.sim { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: grid; gap: 14px; min-width: 0; }
+.sim-head { display: grid; gap: 6px; }
+.sim-head p { color: var(--muted); font-size: 0.92rem; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button, .controls input[type="number"] { font-family: var(--sans); font-size: 0.88rem; border-radius: 6px; border: 1px solid var(--line); background: var(--surface2); color: var(--fg); padding: 6px 12px; min-height: 34px; }
+button { cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--read); outline-offset: 2px; }
+button.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.controls input[type="number"] { width: 72px; font-family: var(--mono); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; background: transparent; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.sep { width: 1px; height: 24px; background: var(--line); }
+
+.stage { background: var(--surface2); border-radius: 8px; overflow-x: auto; min-height: 140px; padding: 12px; }
+.status { font-size: 0.95rem; padding: 10px 12px; border-left: 3px solid var(--fg); background: var(--surface2); border-radius: 0 6px 6px 0; min-height: 46px; }
+.status.k-read { border-color: var(--read); }
+.status.k-write { border-color: var(--write); }
+.status.k-merge { border-color: var(--merge); }
+.status.k-skip { border-color: var(--skip); }
+.status.k-found { border-color: var(--found); }
+.counters { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+.ctr { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; display: grid; gap: 2px; }
+.ctr b { font-family: var(--mono); font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.ctr span { font-size: 0.78rem; color: var(--muted); }
+details.log summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); }
+details.log ol { margin: 8px 0 0; padding-left: 22px; font-size: 0.85rem; color: var(--muted); display: grid; gap: 2px; }
+details.log li:last-child { color: var(--fg); }
+
+/* B-tree SVG */
+svg.tree { display: block; }
+.tree .node rect.box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+.tree .node line.div { stroke: var(--line); }
+.tree .node text { font-family: var(--mono); font-size: 13px; fill: var(--fg); text-anchor: middle; }
+.tree .node.read rect.box { fill: var(--read-bg); stroke: var(--read); stroke-width: 2.5; }
+.tree .node.write rect.box { fill: var(--write-bg); stroke: var(--write); stroke-width: 2.5; }
+.tree .node.split rect.box { fill: var(--merge-bg); stroke: var(--merge); stroke-width: 2.5; }
+.tree .node.found rect.box { fill: var(--found-bg); stroke: var(--found); stroke-width: 2.5; }
+.tree .node text.hot { font-weight: 600; fill: var(--write); }
+.tree .node.found text.hot { fill: var(--found); }
+.tree .edge { stroke: var(--line); stroke-width: 1.5; fill: none; }
+.tree .edge.read { stroke: var(--read); stroke-width: 2.5; }
+.tree .chain { stroke: var(--skip); stroke-width: 1.2; stroke-dasharray: 3 3; fill: none; }
+.tree .lvl { font-family: var(--sans); font-size: 11px; fill: var(--muted); }
+.tree .pop { animation: pop 0.45s ease-out; transform-box: fill-box; transform-origin: center; }
+@keyframes pop { from { opacity: 0; transform: scale(0.7); } to { opacity: 1; transform: none; } }
+
+/* LSM stage */
+.lsm { display: grid; gap: 10px; min-width: 520px; }
+.tier { display: grid; grid-template-columns: 92px 1fr; gap: 10px; align-items: start; }
+.tier-label { font-size: 0.78rem; color: var(--muted); padding-top: 6px; line-height: 1.35; }
+.tier-label b { display: block; color: var(--fg); font-size: 0.85rem; }
+.disk-rule { display: flex; align-items: center; gap: 8px; font-size: 0.75rem; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+.disk-rule::before, .disk-rule::after { content: ""; flex: 1; border-top: 1px dashed var(--line); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; min-height: 40px; align-items: flex-start; }
+.empty { font-size: 0.8rem; color: var(--skip); padding-top: 8px; }
+.box { background: var(--surface); border: 1.5px solid var(--line); border-radius: 6px; padding: 5px 7px; display: grid; gap: 4px; transition: border-color 0.2s, background-color 0.2s; }
+.box.read { border-color: var(--read); background: var(--read-bg); border-width: 2.5px; }
+.box.write { border-color: var(--write); background: var(--write-bg); border-width: 2.5px; }
+.box.merge { border-color: var(--merge); background: var(--merge-bg); border-width: 2.5px; }
+.box.skip { border-style: dashed; border-color: var(--skip); opacity: 0.55; }
+.box.found { border-color: var(--found); background: var(--found-bg); border-width: 2.5px; }
+.box.pop { animation: popin 0.45s ease-out; }
+@keyframes popin { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+.pname { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 3px; max-width: 260px; }
+.chip { font-family: var(--mono); font-size: 0.78rem; padding: 0 5px; border-radius: 3px; background: var(--surface2); line-height: 1.6; font-variant-numeric: tabular-nums; }
+.chip sup { font-size: 0.6rem; color: var(--muted); margin-left: 1px; }
+.chip.hot { background: var(--write); color: var(--surface); }
+.chip.hot sup { color: inherit; }
+.chip.hit { background: var(--found); color: var(--surface); }
+.chip.more { background: transparent; color: var(--muted); }
+.wal { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+.wal .chip { background: transparent; border: 1px solid var(--line); }
+.wal-arrow { font-size: 0.75rem; color: var(--muted); }
+
+/* reading section */
+.notes { display: grid; gap: 16px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.card ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 0.92rem; }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 0.9rem; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 0.8rem; color: var(--muted); font-weight: 500; letter-spacing: 0.02em; }
+td:first-child { color: var(--muted); white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) {
+  .tree .pop, .box.pop { animation: none; }
+  .box { transition: none; }
+}
+@media (max-width: 520px) {
+  .sim { padding: 14px; }
+  h1 { font-size: 1.5rem; }
+}
+</style>
+
+<div class="wrap">
+<header>
+  <h1>B-tree와 LSM-tree, 그리고 ClickHouse MergeTree</h1>
+  <p class="lede">같은 키를 넣어도 B-tree는 디스크의 페이지를 그 자리에서 고치고, LSM 계열은 새 파일을 만들고 나중에 합칩니다. 버튼을 눌러 한 단계씩 어떤 페이지와 파일을 읽고 쓰는지 확인해 보세요.</p>
+  <div class="legend" aria-label="색 범례">
+    <span><i class="sw read"></i>읽기</span>
+    <span><i class="sw write"></i>쓰기</span>
+    <span><i class="sw merge"></i>분할 · 병합</span>
+    <span><i class="sw skip"></i>건너뜀</span>
+    <span><i class="sw found"></i>찾음</span>
+  </div>
+  <label class="speed" for="speed">단계 간격 <input id="speed" type="range" min="150" max="1600" step="50" value="750"> <span id="speedv" class="mono">0.75s</span></label>
+</header>
+
+<section class="sim" aria-labelledby="bt-h">
+  <div class="sim-head">
+    <h2 id="bt-h">B+tree: 제자리 갱신</h2>
+    <p>한 페이지에 키가 최대 3개 들어가는 B+tree입니다. 삽입하면 루트에서 리프까지 페이지를 읽고, 리프 페이지를 원래 위치에 다시 씁니다. 페이지가 넘치면 둘로 나누고 가운데 키를 부모에 올립니다. 리프 사이 점선은 범위 스캔용 연결입니다.</p>
+  </div>
+  <div class="controls">
+    <button class="primary" id="bt-rand">랜덤 키 삽입</button>
+    <input id="bt-key" type="number" min="1" max="99" value="27" aria-label="B-tree 키">
+    <button id="bt-ins">삽입</button>
+    <button id="bt-find">검색</button>
+    <span class="sep"></span>
+    <button id="bt-auto">자동 재생 10회</button>
+    <button id="bt-reset">초기화</button>
+  </div>
+  <div class="stage" id="bt-stage"></div>
+  <div class="status" id="bt-status" aria-live="polite"></div>
+  <div class="counters" id="bt-ctr"></div>
+  <details class="log"><summary>단계 기록</summary><ol id="bt-log"></ol></details>
+</section>
+
+<section class="sim" aria-labelledby="ls-h">
+  <div class="sim-head">
+    <h2 id="ls-h">LSM-tree와 MergeTree: 추가 후 병합</h2>
+    <p id="ls-desc"></p>
+  </div>
+  <div class="controls">
+    <div class="seg" role="group" aria-label="엔진 선택">
+      <button id="mode-lsm" aria-pressed="true">LSM-tree (RocksDB식)</button>
+      <button id="mode-mt" aria-pressed="false">ClickHouse MergeTree</button>
+    </div>
+    <span class="sep"></span>
+    <button class="primary" id="ls-rand">랜덤 키 PUT</button>
+    <input id="ls-key" type="number" min="1" max="99" value="27" aria-label="LSM 키">
+    <button id="ls-ins">PUT</button>
+    <button id="ls-find">GET</button>
+    <span class="sep"></span>
+    <button id="ls-auto">자동 재생 12회</button>
+    <button id="ls-reset">초기화</button>
+  </div>
+  <div class="stage" id="ls-stage"></div>
+  <div class="status" id="ls-status" aria-live="polite"></div>
+  <div class="counters" id="ls-ctr"></div>
+  <details class="log"><summary>단계 기록</summary><ol id="ls-log"></ol></details>
+</section>
+
+<section class="notes" aria-labelledby="cmp-h">
+  <h2 id="cmp-h">무엇이 다른가</h2>
+  <div class="tbl">
+  <table>
+    <thead><tr><th></th><th>B+tree</th><th>LSM-tree</th><th>ClickHouse MergeTree</th></tr></thead>
+    <tbody>
+      <tr><td>쓰기 단위</td><td>고정 크기 페이지 (InnoDB 16KB, PostgreSQL 8KB)</td><td>memtable을 모아 SSTable 파일로 flush</td><td>INSERT 한 번 = part 하나</td></tr>
+      <tr><td>디스크 쓰기 방식</td><td>페이지를 원래 위치에 덮어씀 (랜덤 쓰기)</td><td>새 파일을 순차로 씀. 기존 파일은 수정하지 않음</td><td>새 part를 순차로 씀. 기존 part는 수정하지 않음</td></tr>
+      <tr><td>메모리 버퍼</td><td>buffer pool (페이지 캐시)</td><td>memtable + WAL</td><td>기본 없음. <code>async_insert</code>로 서버에서 모을 수 있음</td></tr>
+      <tr><td>갱신 · 삭제</td><td>같은 페이지에서 직접 수정</td><td>새 버전 또는 tombstone을 쓰고 compaction에서 정리</td><td>엔진에 따라 다름 (ReplacingMergeTree는 merge 시 최신만 남김)</td></tr>
+      <tr><td>읽기</td><td>루트→리프 페이지 높이만큼. 항상 예측 가능</td><td>memtable → L0 → L1 … bloom filter로 파일을 건너뜀. 최신 값을 찾으면 멈춤</td><td>모든 활성 part에서 primary index(sparse)로 granule을 고르고 결과를 합침</td></tr>
+      <tr><td>배경 작업</td><td>거의 없음 (vacuum 등은 별개)</td><td>compaction</td><td>background merge</td></tr>
+      <tr><td>주로 쓰는 곳</td><td>OLTP DB (MySQL, PostgreSQL)</td><td>RocksDB, Cassandra, LevelDB, Prometheus TSDB의 구조</td><td>ClickHouse, VictoriaMetrics/VictoriaLogs가 비슷한 part 병합 구조</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <h3>시뮬레이터에서 볼 것</h3>
+      <ul>
+        <li>B+tree는 키 하나를 넣을 때마다 쓰기 카운터가 1 이상 오릅니다. 분할이 일어나면 페이지 3개를 한꺼번에 다시 씁니다.</li>
+        <li>LSM은 PUT 4번까지 디스크 파일이 그대로입니다. 대신 compaction 때 같은 키를 여러 번 다시 쓰고, 이것이 쓰기 증폭 숫자로 나타납니다.</li>
+        <li>같은 키를 다시 PUT하면 LSM에는 두 버전이 공존하다가 compaction에서 옛 버전이 사라집니다.</li>
+        <li>GET은 B+tree에서 항상 높이만큼 읽고, LSM에서는 bloom filter가 대부분의 파일을 걸러 줍니다.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>시뮬레이터가 단순화한 부분</h3>
+      <ul>
+        <li>B+tree 페이지 쓰기 수는 분할 시 고친 페이지 수를 더한 근사값입니다. 실제 DB는 redo log와 buffer pool 때문에 쓰는 시점이 미뤄집니다.</li>
+        <li>LSM은 memtable 4키, L0 3파일, 파일당 6키로 아주 작게 잡았습니다. RocksDB 기본값은 L0 4파일에서 compaction을 시작합니다.</li>
+        <li>MergeTree의 실제 merge 대상은 크기 기반 휴리스틱으로 고릅니다. 여기서는 같은 level의 인접 part 3개를 고릅니다.</li>
+        <li>bloom filter의 false positive는 약 10%로 흉내 냈습니다.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+</div>
+
+<script>
+(() => {
+const $ = (s) => document.querySelector(s);
+const byK = (a, b) => a.k - b.k;
+let delay = 750;
+
+class Player {
+  constructor(render) { this.render = render; this.q = []; this.t = null; }
+  push(f) { this.q.push(f); if (!this.t) this.tick(); }
+  tick() {
+    const f = this.q.shift();
+    if (!f) { this.t = null; return; }
+    this.render(f);
+    this.t = setTimeout(() => this.tick(), delay);
+  }
+  clear() { clearTimeout(this.t); this.t = null; this.q = []; }
+}
+
+function logTo(el, msg) {
+  const li = document.createElement('li');
+  li.textContent = msg;
+  el.appendChild(li);
+  while (el.children.length > 40) el.removeChild(el.firstChild);
+}
+function counters(el, items) {
+  el.innerHTML = items.map(([v, l]) => `<div class="ctr"><b>${v}</b><span>${l}</span></div>`).join('');
+}
+function status(el, f) {
+  el.className = 'status' + (f.kind ? ' k-' + f.kind : '');
+  el.textContent = f.msg;
+}
+const rnd = (n) => 1 + Math.floor(Math.random() * n);
+
+/* ---------------- B+tree ---------------- */
+const MAX = 3;
+let bt;
+function btReset() {
+  bt = { root: { id: 1, leaf: true, keys: [], children: [] }, nid: 1, reads: 0, writes: 0, n: 0, last: '–' };
+}
+function btMk(leaf) { return { id: ++bt.nid, leaf, keys: [], children: [] }; }
+function btHeight(n) { let h = 1; while (!n.leaf) { n = n.children[0]; h++; } return h; }
+function btSnap(hl, msg, kind) {
+  return { root: structuredClone(bt.root), hl, msg, kind: kind || '',
+    c: { n: bt.n, reads: bt.reads, writes: bt.writes, h: btHeight(bt.root), last: bt.last } };
+}
+function btDescend(k, emit, verb) {
+  const path = [];
+  let n = bt.root;
+  for (;;) {
+    path.push(n); bt.reads++;
+    const ids = path.map((x) => x.id);
+    if (n.leaf) {
+      emit(btSnap({ read: ids }, `${verb} ${k}: 리프 페이지 [${n.keys.join(', ') || '비어 있음'}] 읽기`, 'read'));
+      break;
+    }
+    let i = 0;
+    while (i < n.keys.length && k >= n.keys[i]) i++;
+    emit(btSnap({ read: ids }, `${verb} ${k}: 페이지 [${n.keys.join(', ')}] 읽기 → ${i + 1}번째 자식으로 내려감`, 'read'));
+    n = n.children[i];
+  }
+  return path;
+}
+function btInsert(k, emit) {
+  const path = btDescend(k, emit, 'INSERT');
+  const leaf = path[path.length - 1];
+  if (leaf.keys.includes(k)) {
+    bt.writes++;
+    emit(btSnap({ write: [leaf.id], key: k }, `${k}는 이미 있음 → 같은 페이지를 그 자리에서 덮어씀 (in-place update)`, 'write'));
+    return;
+  }
+  leaf.keys.push(k); leaf.keys.sort((a, b) => a - b); bt.n++; bt.writes++;
+  emit(btSnap({ write: [leaf.id], key: k }, `리프에 ${k}를 넣고 이 페이지를 디스크의 원래 자리에 다시 씀 (랜덤 쓰기)`, 'write'));
+  let i = path.length - 1;
+  while (path[i].keys.length > MAX) {
+    const node = path[i], parent = i > 0 ? path[i - 1] : null, right = btMk(node.leaf);
+    let sep;
+    if (node.leaf) { right.keys = node.keys.splice(2); sep = right.keys[0]; }
+    else { right.keys = node.keys.splice(3); sep = node.keys.pop(); right.children = node.children.splice(3); }
+    if (!parent) {
+      const r = btMk(false); r.keys = [sep]; r.children = [node, right]; bt.root = r; bt.writes += 3;
+      emit(btSnap({ split: [node.id, right.id], write: [r.id] }, `루트 페이지가 넘침 → 둘로 나누고 ${sep}를 새 루트로 올림. 트리 높이 +1`, 'merge'));
+      break;
+    }
+    const ci = parent.children.indexOf(node);
+    parent.children.splice(ci + 1, 0, right); parent.keys.splice(ci, 0, sep); bt.writes += 3;
+    emit(btSnap({ split: [node.id, right.id], write: [parent.id] }, `페이지에 키가 ${MAX + 1}개 → 두 페이지로 분할하고 ${sep}를 부모에 올림. 페이지 3개를 다시 씀`, 'merge'));
+    i--;
+  }
+}
+function btFind(k, emit) {
+  const before = bt.reads;
+  const path = btDescend(k, emit, 'SEARCH');
+  const leaf = path[path.length - 1];
+  bt.last = String(bt.reads - before);
+  const hit = leaf.keys.includes(k);
+  emit(btSnap({ found: hit ? [leaf.id] : [], read: hit ? [] : [leaf.id], key: k, path: path.map((x) => x.id) },
+    hit ? `${k} 찾음: 페이지 ${bt.last}개 읽음 (= 트리 높이)` : `${k} 없음: 페이지 ${bt.last}개 읽음 (= 트리 높이)`, hit ? 'found' : 'read'));
+}
+
+const KW = 30, KH = 28, PAD = 8, GAP = 16, LH = 76, TOP = 14, LEFT = 46;
+let btPrev = new Set();
+function btRender(f) {
+  const hl = f.hl || {};
+  const cls = (id) => (hl.found || []).includes(id) ? 'found' : (hl.split || []).includes(id) ? 'split'
+    : (hl.write || []).includes(id) ? 'write' : (hl.read || []).includes(id) ? 'read' : '';
+  const readPath = new Set([...(hl.read || []), ...(hl.path || [])]);
+  let cursor = LEFT, depthMax = 0;
+  const nodes = [], leaves = [];
+  (function place(n, d) {
+    n.w = Math.max(n.keys.length, 1) * KW + PAD; n.y = TOP + d * LH; depthMax = Math.max(depthMax, d);
+    if (n.leaf) { n.x = cursor; cursor += n.w + GAP; leaves.push(n); }
+    else {
+      n.children.forEach((c) => place(c, d + 1));
+      const a = n.children[0], b = n.children[n.children.length - 1];
+      n.x = (a.x + b.x + b.w) / 2 - n.w / 2;
+    }
+    nodes.push(n);
+  })(f.root, 0);
+  const W = Math.max(cursor + 10, 300), H = TOP + depthMax * LH + KH + 16;
+  let s = `<svg class="tree" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="B+tree 구조">`;
+  s += `<defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--skip)"/></marker></defs>`;
+  for (let d = 0; d <= depthMax; d++) {
+    const label = d === 0 ? '루트' : d === depthMax ? '리프' : '내부';
+    s += `<text class="lvl" x="4" y="${TOP + d * LH + KH / 2 + 4}">${label}</text>`;
+  }
+  for (const n of nodes) {
+    if (n.leaf) continue;
+    n.children.forEach((c, i) => {
+      const x1 = n.x + PAD / 2 + i * KW, y1 = n.y + KH, x2 = c.x + c.w / 2, y2 = c.y;
+      const on = readPath.has(n.id) && readPath.has(c.id);
+      s += `<path class="edge${on ? ' read' : ''}" d="M${x1},${y1} C${x1},${y1 + 26} ${x2},${y2 - 26} ${x2},${y2}"/>`;
+    });
+  }
+  for (let i = 0; i + 1 < leaves.length; i++) {
+    const a = leaves[i], b = leaves[i + 1], y = a.y + KH / 2;
+    s += `<line class="chain" x1="${a.x + a.w + 1}" y1="${y}" x2="${b.x - 2}" y2="${y}" marker-end="url(#arr)"/>`;
+  }
+  const now = new Set();
+  for (const n of nodes) {
+    now.add(n.id);
+    const pop = btPrev.size && !btPrev.has(n.id) ? ' pop' : '';
+    s += `<g class="node ${cls(n.id)}${pop}"><rect class="box" x="${n.x}" y="${n.y}" width="${n.w}" height="${KH}" rx="4"/>`;
+    n.keys.forEach((k, j) => {
+      const cx = n.x + PAD / 2 + j * KW + KW / 2;
+      if (j > 0) s += `<line class="div" x1="${n.x + PAD / 2 + j * KW}" y1="${n.y + 4}" x2="${n.x + PAD / 2 + j * KW}" y2="${n.y + KH - 4}"/>`;
+      s += `<text x="${cx}" y="${n.y + KH / 2 + 5}"${k === hl.key && cls(n.id) ? ' class="hot"' : ''}>${k}</text>`;
+    });
+    s += `</g>`;
+  }
+  s += `</svg>`;
+  btPrev = now;
+  $('#bt-stage').innerHTML = s;
+  status($('#bt-status'), f);
+  counters($('#bt-ctr'), [[f.c.n, '저장된 키'], [f.c.h, '트리 높이'], [f.c.reads, '페이지 읽기 (누적)'], [f.c.writes, '페이지 쓰기 (누적)'], [f.c.last, '마지막 검색 페이지 읽기']]);
+  if (f.msg) logTo($('#bt-log'), f.msg);
+}
+const btPlayer = new Player(btRender);
+const btEmit = (f) => btPlayer.push(f);
+const silent = () => {};
+
+function btInit() {
+  btPlayer.clear(); btReset(); btPrev = new Set();
+  $('#bt-log').innerHTML = '';
+  [10, 20, 30, 40, 50, 25, 35, 15, 5, 45, 60].forEach((k) => btInsert(k, silent));
+  bt.reads = 0; bt.writes = 0;
+  btRender(btSnap({}, '키 11개가 들어 있는 상태입니다. "랜덤 키 삽입"이나 "자동 재생"을 눌러 보세요.', ''));
+}
+
+/* ---------------- LSM / MergeTree ---------------- */
+const MEM = 4, L0MAX = 3, PART = 6, L1MAX = 3;
+let ls;
+function lsReset(mode) {
+  ls = { mode, mem: [], wal: [], levels: [[], [], []], parts: [], latest: {}, pid: 0, block: 0,
+    n: 0, disk: 0, last: '–', skips: '–' };
+}
+function mkPart(rows, level, name) {
+  const id = ++ls.pid;
+  return { id, level, name: name || `sst-${String(id).padStart(3, '0')}`, rows: rows.slice().sort(byK) };
+}
+const ids = (ps) => ps.map((p) => p.id);
+const lo = (p) => p.rows[0].k, hi = (p) => p.rows[p.rows.length - 1].k;
+function lsFileCount() { return ls.mode === 'lsm' ? ls.levels.flat().length : ls.parts.length; }
+function lsSnap(hl, msg, kind) {
+  return { mode: ls.mode, mem: structuredClone(ls.mem), wal: structuredClone(ls.wal),
+    levels: structuredClone(ls.levels), parts: structuredClone(ls.parts), hl, msg, kind: kind || '',
+    c: { n: ls.n, disk: ls.disk, files: lsFileCount(), last: ls.last, skips: ls.skips } };
+}
+function mergeNewest(parts) {
+  const m = new Map();
+  let total = 0;
+  for (const p of parts) for (const r of p.rows) { total++; const o = m.get(r.k); if (!o || r.v > o.v) m.set(r.k, r); }
+  const rows = [...m.values()].sort(byK);
+  return { rows, dropped: total - rows.length };
+}
+const chunk = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; };
+
+function lsPut(k, emit) {
+  const v = (ls.latest[k] || 0) + 1; ls.latest[k] = v; ls.n++;
+  ls.wal.push({ k, v });
+  emit(lsSnap({ wal: true, key: k }, `PUT ${k}: 먼저 WAL 파일 끝에 append (순차 쓰기, 장애 복구용)`, 'write'));
+  const i = ls.mem.findIndex((r) => r.k === k);
+  if (i >= 0) ls.mem[i] = { k, v }; else { ls.mem.push({ k, v }); ls.mem.sort(byK); }
+  emit(lsSnap({ mem: true, key: k }, i >= 0 ? `memtable에 ${k}가 이미 있음 → 메모리에서 v${v}로 교체` :
+    `memtable(메모리, 정렬 유지)에 ${k} 삽입. 디스크의 데이터 파일은 건드리지 않음`, 'write'));
+  if (ls.mem.length >= MEM) lsFlush(emit);
+}
+function lsFlush(emit) {
+  const p = mkPart(ls.mem, 0);
+  ls.levels[0].unshift(p); ls.disk += p.rows.length; ls.mem = []; ls.wal = [];
+  emit(lsSnap({ newParts: [p.id] }, `memtable이 가득 참 → 정렬된 불변 파일 ${p.name}로 한 번에 flush. WAL은 비움`, 'write'));
+  lsCompact(emit);
+}
+function lsCompact(emit) {
+  if (ls.levels[0].length >= L0MAX) {
+    const inputs = [...ls.levels[0], ...ls.levels[1]];
+    emit(lsSnap({ merge: ids(inputs) }, `L0 파일이 ${ls.levels[0].length}개. 서로 키 범위가 겹치므로 L1 파일과 함께 병합 정렬 (compaction)`, 'merge'));
+    const { rows, dropped } = mergeNewest(inputs);
+    const out = chunk(rows, PART).map((r) => mkPart(r, 1));
+    ls.levels[0] = []; ls.levels[1] = out; ls.disk += rows.length;
+    emit(lsSnap({ newParts: ids(out) }, `L1에 새 파일 ${out.length}개로 다시 씀 (${rows.length}키를 또 기록).` +
+      (dropped ? ` 같은 키의 옛 버전 ${dropped}개 제거.` : '') + ' 입력 파일은 삭제', 'merge'));
+  }
+  if (ls.levels[1].length > L1MAX) {
+    const inputs = [...ls.levels[1], ...ls.levels[2]];
+    emit(lsSnap({ merge: ids(inputs) }, `L1 파일이 ${ls.levels[1].length}개로 한도 초과 → L2와 병합`, 'merge'));
+    const { rows, dropped } = mergeNewest(inputs);
+    const out = chunk(rows, PART).map((r) => mkPart(r, 2));
+    ls.levels[1] = []; ls.levels[2] = out; ls.disk += rows.length;
+    emit(lsSnap({ newParts: ids(out) }, `L2에 새 파일 ${out.length}개로 다시 씀 (${rows.length}키).` +
+      (dropped ? ` 옛 버전 ${dropped}개 제거.` : ''), 'merge'));
+  }
+}
+function bloomMaybe(k, p) {
+  if (p.rows.some((r) => r.k === k)) return true;
+  return ((k * 2654435761 + p.id * 40503) >>> 0) % 10 === 0;
+}
+function lsGet(k, emit) {
+  let files = 0, skips = 0;
+  const done = (f) => { ls.last = String(files); ls.skips = String(skips); emit(f()); };
+  emit(lsSnap({ mem: true, key: k }, `GET ${k}: 가장 최신 데이터가 있는 memtable부터 확인`, 'read'));
+  const m = ls.mem.find((r) => r.k === k);
+  if (m) return done(() => lsSnap({ mem: true, hit: k }, `memtable에서 ${k} (v${m.v}) 찾음. 디스크 파일은 하나도 읽지 않음`, 'found'));
+  for (let L = 0; L < 3; L++) {
+    const lv = ls.levels[L];
+    if (!lv.length) continue;
+    const out = lv.filter((p) => k < lo(p) || k > hi(p));
+    const cand = lv.filter((p) => k >= lo(p) && k <= hi(p));
+    if (out.length) {
+      skips += out.length;
+      emit(lsSnap({ skip: ids(out) }, `L${L}: 키 범위(min~max)에 ${k}가 없는 파일 ${out.length}개는 건너뜀`, 'skip'));
+    }
+    for (const p of cand) {
+      if (!bloomMaybe(k, p)) {
+        skips++;
+        emit(lsSnap({ skip: [p.id] }, `${p.name} bloom filter가 "확실히 없음" → 파일을 읽지 않음`, 'skip'));
+        continue;
+      }
+      files++;
+      const r = p.rows.find((x) => x.k === k);
+      if (r) return done(() => lsSnap({ found: [p.id], hit: k }, `${p.name}: bloom "있을 수도" → 읽어서 ${k} (v${r.v}) 찾음. 가장 최신 버전이므로 아래 레벨은 보지 않음`, 'found'));
+      emit(lsSnap({ read: [p.id] }, `${p.name}: bloom "있을 수도" → 읽었지만 없음 (false positive)`, 'read'));
+    }
+  }
+  done(() => lsSnap({}, `${k} 없음. 파일 ${files}개 읽음, ${skips}개 건너뜀`, 'read'));
+}
+
+function mtInsert(keys, emit) {
+  const b = ++ls.block;
+  ls.n += keys.length;
+  emit(lsSnap({ batch: keys }, `INSERT ${keys.length}행 (블록 ${b}): memtable·WAL 없이 바로 새 part를 만든다`, 'write'));
+  const p = mkPart(keys.map((k) => ({ k, v: 1 })), 0, `all_${b}_${b}_0`);
+  p.minB = b; p.maxB = b;
+  ls.parts.push(p); ls.disk += p.rows.length;
+  emit(lsSnap({ newParts: [p.id] }, `part ${p.name} 기록: 정렬 키 순서의 컬럼 파일 + primary.idx(sparse index). 이후 수정하지 않음`, 'write'));
+  mtMerge(emit);
+}
+function mtMerge(emit) {
+  for (;;) {
+    let at = -1;
+    for (let i = 0; i + 2 < ls.parts.length; i++) {
+      const a = ls.parts[i].level;
+      if (a === ls.parts[i + 1].level && a === ls.parts[i + 2].level) { at = i; break; }
+    }
+    if (at < 0) return;
+    const inputs = ls.parts.slice(at, at + 3);
+    emit(lsSnap({ merge: ids(inputs) }, `background merge: 블록 번호가 이어지는 part 3개 (${inputs.map((p) => p.name).join(', ')}) 선택`, 'merge'));
+    const lv = inputs[0].level + 1;
+    const p = mkPart(inputs.flatMap((x) => x.rows), lv, `all_${inputs[0].minB}_${inputs[2].maxB}_${lv}`);
+    p.minB = inputs[0].minB; p.maxB = inputs[2].maxB;
+    ls.parts.splice(at, 3, p); ls.disk += p.rows.length;
+    emit(lsSnap({ newParts: [p.id] }, `새 part ${p.name}: 정렬을 유지하며 합침. 중복 키도 그대로 둠 (중복 제거는 ReplacingMergeTree의 역할). 이름 끝 숫자 = merge level`, 'merge'));
+  }
+}
+function mtGet(k, emit) {
+  let read = 0, rows = 0;
+  emit(lsSnap({ key: k }, `SELECT ... WHERE key = ${k}: 활성 part 전부가 대상. 각 part의 primary index부터 확인`, 'read'));
+  const out = ls.parts.filter((p) => k < lo(p) || k > hi(p));
+  const cand = ls.parts.filter((p) => k >= lo(p) && k <= hi(p));
+  if (out.length) emit(lsSnap({ skip: ids(out) }, `primary index 범위에 ${k}가 없는 part ${out.length}개는 읽지 않음`, 'skip'));
+  for (const p of cand) {
+    read++;
+    const hits = p.rows.filter((r) => r.k === k).length;
+    rows += hits;
+    emit(lsSnap(hits ? { found: [p.id], hit: k } : { read: [p.id] }, `${p.name}: 범위 안 → 해당 granule 읽기. ${hits ? hits + '행 일치' : '일치하는 행 없음'}`, hits ? 'found' : 'read'));
+  }
+  ls.last = String(read); ls.skips = String(out.length);
+  emit(lsSnap({}, `조회 끝: part ${ls.parts.length}개 중 ${read}개 읽음, 결과 ${rows}행. LSM과 달리 최신 값을 찾아도 멈추지 않고 모든 part 결과를 합친다`, rows ? 'found' : 'read'));
+}
+
+let lsPrev = new Set();
+function chipHTML(r, hl) {
+  const c = r.k === hl.hit ? ' hit' : r.k === hl.key && (hl.mem || hl.wal) ? ' hot' : '';
+  return `<span class="chip${c}">${r.k}${r.v > 1 ? `<sup>v${r.v}</sup>` : ''}</span>`;
+}
+function partHTML(p, hl, now) {
+  now.add(p.id);
+  const st = (hl.found || []).includes(p.id) ? 'found' : (hl.merge || []).includes(p.id) ? 'merge'
+    : (hl.newParts || []).includes(p.id) ? 'write' : (hl.read || []).includes(p.id) ? 'read'
+    : (hl.skip || []).includes(p.id) ? 'skip' : '';
+  const pop = lsPrev.size && !lsPrev.has(p.id) ? ' pop' : '';
+  const shown = p.rows.slice(0, 14).map((r) => chipHTML(r, hl)).join('');
+  const more = p.rows.length > 14 ? `<span class="chip more">+${p.rows.length - 14}</span>` : '';
+  return `<div class="box ${st}${pop}"><div class="pname"><span>${p.name}</span><span>${lo(p)}–${hi(p)}</span></div><div class="chips">${shown}${more}</div></div>`;
+}
+function lsRender(f) {
+  const hl = f.hl || {};
+  const now = new Set();
+  let s = '<div class="lsm">';
+  if (f.mode === 'lsm') {
+    s += `<div class="tier"><div class="tier-label"><b>memtable</b>메모리 · 최대 ${MEM}키</div><div class="row">`;
+    s += `<div class="box ${hl.hit && f.mem.some((r) => r.k === hl.hit) ? 'found' : hl.mem ? (f.kind === 'read' ? 'read' : 'write') : ''}"><div class="chips">${f.mem.length ? f.mem.map((r) => chipHTML(r, hl)).join('') : '<span class="empty">비어 있음</span>'}</div></div></div></div>`;
+    s += `<div class="disk-rule">디스크</div>`;
+    s += `<div class="tier"><div class="tier-label"><b>WAL</b>append-only 로그</div><div class="row"><div class="box ${hl.wal ? 'write' : ''}"><div class="wal">${f.wal.length ? f.wal.map((r) => chipHTML(r, hl)).join('') + '<span class="wal-arrow">← 끝에만 추가</span>' : '<span class="empty">flush 후 비워짐</span>'}</div></div></div></div>`;
+    const lbl = ['겹치는 범위 허용', '범위 겹치지 않음', '범위 겹치지 않음'];
+    f.levels.forEach((lv, i) => {
+      s += `<div class="tier"><div class="tier-label"><b>L${i}</b>${lbl[i]}${i === 0 ? ` · ${L0MAX}개면 병합` : i === 1 ? ` · ${L1MAX}개 초과면 병합` : ''}</div><div class="row">`;
+      s += lv.length ? lv.map((p) => partHTML(p, hl, now)).join('') : '<span class="empty">파일 없음</span>';
+      s += '</div></div>';
+    });
+  } else {
+    s += `<div class="tier"><div class="tier-label"><b>INSERT</b>클라이언트 배치</div><div class="row">`;
+    s += hl.batch ? `<div class="box write"><div class="chips">${hl.batch.map((k) => `<span class="chip hot">${k}</span>`).join('')}</div></div>` : '<span class="empty">배치 대기</span>';
+    s += '</div></div><div class="disk-rule">디스크 · 파티션 all</div>';
+    s += `<div class="tier"><div class="tier-label"><b>활성 part</b>블록 번호 순<br>all_최소_최대_level</div><div class="row">`;
+    s += f.parts.length ? f.parts.map((p) => partHTML(p, hl, now)).join('') : '<span class="empty">part 없음</span>';
+    s += '</div></div>';
+  }
+  s += '</div>';
+  lsPrev = now;
+  $('#ls-stage').innerHTML = s;
+  status($('#ls-status'), f);
+  const amp = f.c.n ? (f.c.disk / f.c.n).toFixed(2) : '–';
+  const unit = f.mode === 'lsm' ? '키' : '행';
+  counters($('#ls-ctr'), [[f.c.n, `넣은 ${unit}`], [f.c.disk, `디스크에 기록한 ${unit} (flush·병합)`], [amp, '쓰기 증폭'],
+    [f.c.files, f.mode === 'lsm' ? '디스크 파일 수' : '활성 part 수'], [f.c.last, f.mode === 'lsm' ? '마지막 GET 읽은 파일' : '마지막 조회 읽은 part'], [f.c.skips, '마지막 조회 건너뜀']]);
+  if (f.msg) logTo($('#ls-log'), f.msg);
+}
+const lsPlayer = new Player(lsRender);
+const lsEmit = (f) => lsPlayer.push(f);
+
+const DESC = {
+  lsm: '쓰기는 WAL에 append하고 메모리의 memtable에 넣는 것으로 끝납니다. memtable이 차면 정렬된 불변 파일(SSTable)로 flush하고, L0 파일이 쌓이면 아래 레벨과 병합 정렬(compaction)합니다. 같은 키를 다시 넣으면 새 버전이 생기고, 옛 버전은 compaction에서 사라집니다.',
+  mt: 'ClickHouse MergeTree에는 memtable과 WAL이 없습니다. INSERT 한 번이 곧 정렬된 part 하나이고, 백그라운드에서 인접한 part를 합칩니다. part 이름 all_최소블록_최대블록_level이 어떤 INSERT를 몇 번 합쳤는지 알려 줍니다. 조회는 모든 활성 part를 primary index로 거른 뒤 결과를 합칩니다.'
+};
+function randKeyLsm() {
+  const ks = Object.keys(ls.latest);
+  if (ks.length && Math.random() < 0.3) return +ks[Math.floor(Math.random() * ks.length)];
+  return rnd(99);
+}
+const batch = () => Array.from({ length: 4 }, () => rnd(99));
+function lsInit(mode) {
+  lsPlayer.clear(); lsReset(mode); lsPrev = new Set();
+  $('#ls-log').innerHTML = '';
+  $('#ls-desc').textContent = DESC[mode];
+  $('#mode-lsm').setAttribute('aria-pressed', mode === 'lsm');
+  $('#mode-mt').setAttribute('aria-pressed', mode === 'mt');
+  $('#ls-rand').textContent = mode === 'lsm' ? '랜덤 키 PUT' : 'INSERT 배치 (4행)';
+  $('#ls-ins').textContent = mode === 'lsm' ? 'PUT' : 'INSERT 1행';
+  $('#ls-find').textContent = mode === 'lsm' ? 'GET' : 'SELECT';
+  if (mode === 'lsm') {
+    [42, 17, 73, 8, 55, 31, 90, 64, 23, 47, 12, 81, 36, 42, 70, 5, 61, 28, 9, 77, 50, 17].forEach((k) => lsPut(k, silent));
+    ls.n = 0; ls.disk = 0;
+    lsRender(lsSnap({}, 'memtable 2키, L0 파일 2개, L1 파일 2개인 상태입니다. PUT 2번이면 flush가 일어나고, L0가 3개가 되어 compaction이 이어집니다.', ''));
+  } else {
+    [[42, 17, 73, 8], [55, 31, 90, 64], [23, 47, 12, 81], [36, 42, 70, 5], [61, 28, 9, 77]].forEach((b) => mtInsert(b, silent));
+    ls.n = 0; ls.disk = 0;
+    lsRender(lsSnap({}, 'INSERT 5번 뒤의 상태입니다. 처음 3개는 이미 all_1_3_1로 합쳐졌습니다. INSERT를 한 번 더 하면 level 0 part 3개가 합쳐집니다.', ''));
+  }
+}
+
+/* ---------------- wiring ---------------- */
+const keyOf = (id) => Math.min(99, Math.max(1, parseInt($(id).value, 10) || 1));
+$('#speed').addEventListener('input', (e) => { delay = +e.target.value; $('#speedv').textContent = (delay / 1000).toFixed(2) + 's'; });
+$('#bt-rand').addEventListener('click', () => btInsert(rnd(99), btEmit));
+$('#bt-ins').addEventListener('click', () => btInsert(keyOf('#bt-key'), btEmit));
+$('#bt-find').addEventListener('click', () => btFind(keyOf('#bt-key'), btEmit));
+$('#bt-auto').addEventListener('click', () => { for (let i = 0; i < 10; i++) btInsert(rnd(99), btEmit); });
+$('#bt-reset').addEventListener('click', btInit);
+$('#mode-lsm').addEventListener('click', () => lsInit('lsm'));
+$('#mode-mt').addEventListener('click', () => lsInit('mt'));
+$('#ls-rand').addEventListener('click', () => ls.mode === 'lsm' ? lsPut(randKeyLsm(), lsEmit) : mtInsert(batch(), lsEmit));
+$('#ls-ins').addEventListener('click', () => ls.mode === 'lsm' ? lsPut(keyOf('#ls-key'), lsEmit) : mtInsert([keyOf('#ls-key')], lsEmit));
+$('#ls-find').addEventListener('click', () => ls.mode === 'lsm' ? lsGet(keyOf('#ls-key'), lsEmit) : mtGet(keyOf('#ls-key'), lsEmit));
+$('#ls-auto').addEventListener('click', () => {
+  for (let i = 0; i < 12; i++) ls.mode === 'lsm' ? lsPut(randKeyLsm(), lsEmit) : mtInsert(batch(), lsEmit);
+});
+$('#ls-reset').addEventListener('click', () => lsInit(ls.mode));
+
+btInit();
+lsInit('lsm');
+})();
+</script>

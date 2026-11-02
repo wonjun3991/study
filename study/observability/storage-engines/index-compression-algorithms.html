@@ -1,0 +1,674 @@
+<title>인덱스와 압축 알고리즘</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: 탭 4개(알고리즘별 화면). 각 화면은 설명 → 조작 → 무대 → 현재 단계 → 수치 → 핵심 정리 순서.
+   색 의미는 저장 엔진 시뮬레이터와 같다: 읽기=파랑, 쓰기·0 발견=주황, 후보=보라, 건너뜀=회색, 찾음=초록. */
+:root {
+  --bg: #f4f6f9; --surface: #ffffff; --surface2: #eceff4; --fg: #172030; --muted: #5a6677; --line: #ccd3dd;
+  --read: #1f5fd6; --read-bg: #dce7fd; --write: #b8540c; --write-bg: #fde6d2; --merge: #6f3bd8; --merge-bg: #ebe2fd;
+  --skip: #9aa5b4; --found: #0f7a4a; --found-bg: #d3f2e2;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e131a; --surface: #151c26; --surface2: #1c2531; --fg: #e4eaf2; --muted: #93a0b2; --line: #2c3746;
+    --read: #74a7ff; --read-bg: #1a2b48; --write: #ff9d55; --write-bg: #3a2414; --merge: #b593ff; --merge-bg: #2a1f45;
+    --skip: #5c6a7c; --found: #4fd69a; --found-bg: #133626; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e131a; --surface: #151c26; --surface2: #1c2531; --fg: #e4eaf2; --muted: #93a0b2; --line: #2c3746;
+  --read: #74a7ff; --read-bg: #1a2b48; --write: #ff9d55; --write-bg: #3a2414; --merge: #b593ff; --merge-bg: #2a1f45;
+  --skip: #5c6a7c; --found: #4fd69a; --found-bg: #133626; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.6; }
+.wrap { max-width: 1040px; margin: 0 auto; padding-block: 32px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 22px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; line-height: 1.3; }
+h1 { font-size: 1.85rem; letter-spacing: -0.01em; }
+h2 { font-size: 1.3rem; }
+h3 { font-size: 1rem; }
+p { margin: 0; max-width: 70ch; }
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+header { display: grid; gap: 10px; }
+.lede { color: var(--muted); }
+.speed { display: flex; align-items: center; gap: 10px; font-size: 0.85rem; color: var(--muted); flex-wrap: wrap; }
+.speed input { width: 160px; accent-color: var(--read); }
+
+nav.tabs { display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+nav.tabs a { text-decoration: none; color: var(--muted); padding: 6px 12px; border-radius: 6px; font-size: 0.92rem; border: 1px solid transparent; }
+nav.tabs a:hover { color: var(--fg); border-color: var(--line); }
+nav.tabs a[aria-current="page"] { background: var(--fg); color: var(--bg); }
+nav.tabs a:focus-visible { outline: 2px solid var(--read); outline-offset: 2px; }
+nav.tabs small { font-family: var(--mono); font-size: 0.72rem; opacity: 0.7; margin-left: 6px; }
+
+.sim { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: grid; gap: 14px; min-width: 0; }
+.sim-head { display: grid; gap: 6px; }
+.sim-head p { color: var(--muted); font-size: 0.92rem; }
+.where { font-size: 0.8rem; color: var(--muted); }
+.where b { color: var(--fg); font-weight: 500; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button, select, .controls input { font-family: var(--sans); font-size: 0.88rem; border-radius: 6px; border: 1px solid var(--line); background: var(--surface2); color: var(--fg); padding: 6px 12px; min-height: 34px; }
+button { cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--read); outline-offset: 2px; }
+button.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.controls input[type="text"] { font-family: var(--mono); width: 180px; }
+.controls input.wide { width: min(100%, 420px); }
+.controls label { font-size: 0.85rem; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.sep { width: 1px; height: 24px; background: var(--line); }
+.stage { background: var(--surface2); border-radius: 8px; overflow-x: auto; padding: 14px; display: grid; gap: 14px; }
+.status { font-size: 0.95rem; padding: 10px 12px; border-left: 3px solid var(--fg); background: var(--surface2); border-radius: 0 6px 6px 0; min-height: 46px; }
+.status.k-read { border-color: var(--read); } .status.k-write { border-color: var(--write); }
+.status.k-merge { border-color: var(--merge); } .status.k-skip { border-color: var(--skip); } .status.k-found { border-color: var(--found); }
+.counters { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+.ctr { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; display: grid; gap: 2px; }
+.ctr b { font-family: var(--mono); font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.ctr span { font-size: 0.78rem; color: var(--muted); }
+.key { display: grid; gap: 6px; }
+.key ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 0.92rem; }
+.lbl { font-size: 0.75rem; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
+.chip { font-family: var(--mono); font-size: 0.8rem; padding: 1px 7px; border-radius: 4px; background: var(--surface); border: 1px solid var(--line); }
+.chip.found { background: var(--found-bg); border-color: var(--found); }
+.chip.fp { background: var(--write-bg); border-color: var(--write); }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* Bloom */
+.bits { display: grid; grid-template-columns: repeat(16, minmax(30px, 1fr)); gap: 4px; min-width: 520px; }
+.bit { border: 1.5px solid var(--line); border-radius: 4px; background: var(--surface); text-align: center; padding: 3px 0 2px; font-family: var(--mono); transition: background-color 0.2s, border-color 0.2s; }
+.bit b { display: block; font-size: 0.95rem; }
+.bit small { display: block; font-size: 0.62rem; color: var(--muted); }
+.bit.on { background: var(--surface2); border-color: var(--muted); }
+.bit.on b { color: var(--fg); }
+.bit:not(.on) b { color: var(--skip); }
+.bit.set { background: var(--write-bg); border-color: var(--write); border-width: 2.5px; }
+.bit.probe { background: var(--read-bg); border-color: var(--read); border-width: 2.5px; }
+.bit.zero { background: var(--write-bg); border-color: var(--write); border-width: 2.5px; }
+.hashline { font-family: var(--mono); font-size: 0.85rem; }
+
+/* Sparse */
+.marks { display: flex; flex-wrap: wrap; gap: 6px; }
+.mark { font-family: var(--mono); font-size: 0.78rem; border: 1.5px solid var(--line); border-radius: 5px; padding: 3px 7px; background: var(--surface); }
+.mark i { font-style: normal; color: var(--muted); margin-right: 4px; }
+.mark.probe { border-color: var(--read); background: var(--read-bg); border-width: 2.5px; }
+.mark.pick { border-color: var(--merge); background: var(--merge-bg); }
+.granules { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 8px; min-width: 640px; }
+.gr { border: 1.5px solid var(--line); border-radius: 6px; background: var(--surface); padding: 6px 8px; font-family: var(--mono); font-size: 0.75rem; transition: opacity 0.2s, border-color 0.2s; }
+.gr header { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.7rem; margin-bottom: 3px; gap: 6px; }
+.gr .r { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; padding: 0 3px; border-radius: 3px; }
+.gr .r.first { font-weight: 600; }
+.gr .r.hit { background: var(--found); color: var(--surface); }
+.gr.read { border-color: var(--read); background: var(--read-bg); border-width: 2.5px; }
+.gr.cand { border-color: var(--merge); background: var(--merge-bg); }
+.gr.skip { border-style: dashed; border-color: var(--skip); opacity: 0.45; }
+.gr .mm { color: var(--muted); font-size: 0.68rem; }
+
+/* Inverted */
+.inv { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 14px; }
+.docs, .dict { display: grid; gap: 4px; align-content: start; }
+.doc { font-family: var(--mono); font-size: 0.8rem; border: 1.5px solid var(--line); border-radius: 5px; padding: 3px 8px; background: var(--surface); display: flex; gap: 10px; transition: border-color 0.2s; }
+.doc i { font-style: normal; color: var(--muted); }
+.doc.blk { border-left: 4px solid var(--merge); }
+.doc .t.hl { background: var(--found); color: var(--surface); border-radius: 3px; padding: 0 2px; }
+.doc.hit { border-color: var(--found); background: var(--found-bg); }
+.doc.scan { border-color: var(--read); background: var(--read-bg); }
+.dict table { border-collapse: collapse; font-family: var(--mono); font-size: 0.78rem; width: 100%; }
+.dict td { padding: 2px 6px; border-bottom: 1px solid var(--line); }
+.dict td:first-child { color: var(--muted); width: 1%; white-space: nowrap; }
+.dict tr.probe td { background: var(--read-bg); }
+.dict tr.probe td:first-child { color: var(--read); font-weight: 600; }
+.dict .p { display: inline-block; min-width: 18px; text-align: center; border-radius: 3px; margin-right: 2px; }
+.dict .p.in { background: var(--found); color: var(--surface); }
+.combine { font-family: var(--mono); font-size: 0.85rem; display: grid; gap: 2px; }
+
+/* Gorilla */
+.gtbl { overflow-x: auto; }
+.gtbl table { border-collapse: collapse; font-size: 0.78rem; min-width: 980px; width: 100%; }
+.gtbl th, .gtbl td { padding: 5px 7px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.gtbl th { font-family: var(--sans); color: var(--muted); font-weight: 500; font-size: 0.74rem; }
+.gtbl td { font-family: var(--mono); }
+.gtbl td.l, .gtbl th.l { text-align: left; }
+.gtbl tr.cur td { background: var(--read-bg); }
+.gtbl tr.pending td { opacity: 0.2; }
+.xb { letter-spacing: -0.02em; font-size: 0.72rem; }
+.xb .z { color: var(--skip); }
+.xb .m { color: var(--write); font-weight: 600; }
+.xb .w { background: var(--merge-bg); border-radius: 2px; }
+.enc { color: var(--merge); }
+.bitsn { font-weight: 600; }
+.bar { height: 14px; border-radius: 3px; background: var(--surface); border: 1px solid var(--line); overflow: hidden; display: flex; }
+.bar span { display: block; height: 100%; }
+.bar .ts { background: var(--read); } .bar .vs { background: var(--write); }
+.cmp { display: grid; gap: 6px; font-size: 0.85rem; }
+.cmp div { display: grid; grid-template-columns: 110px 1fr 80px; gap: 10px; align-items: center; }
+.cmp b { font-family: var(--mono); font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 720px) { .inv { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .bit, .gr, .doc { transition: none; } }
+</style>
+
+<div class="wrap">
+<header>
+  <h1>관측 저장소의 인덱스와 압축 알고리즘</h1>
+  <p class="lede">ClickHouse, VictoriaLogs, Prometheus가 적은 디스크로 빠르게 찾는 데 쓰는 네 가지 알고리즘입니다. 탭마다 실제로 비트, 인덱스, 블록이 어떻게 움직이는지 단계별로 재생합니다.</p>
+  <label class="speed" for="speed">단계 간격 <input id="speed" type="range" min="150" max="1600" step="50" value="700"> <span id="speedv" class="mono">0.70s</span></label>
+</header>
+
+<nav class="tabs" aria-label="알고리즘">
+  <a href="#bloom" data-tab="bloom">Bloom filter<small>건너뛰기</small></a>
+  <a href="#sparse" data-tab="sparse">Sparse primary index<small>범위 좁히기</small></a>
+  <a href="#inverted" data-tab="inverted">역인덱스<small>위치 찾기</small></a>
+  <a href="#gorilla" data-tab="gorilla">Gorilla 압축<small>줄이기</small></a>
+</nav>
+
+<!-- ============ Bloom ============ -->
+<section class="sim" id="tab-bloom" aria-labelledby="bl-h">
+  <div class="sim-head">
+    <h2 id="bl-h">Bloom filter: "확실히 없음"을 싸게 알아낸다</h2>
+    <p>비트 배열 m개와 해시 함수 k개로 집합을 표현합니다. 넣을 때는 k개 위치를 1로 켜고, 확인할 때는 k개 위치가 모두 1인지 봅니다. 하나라도 0이면 넣은 적이 없다는 게 확실하고, 모두 1이면 "있을 수도" 있습니다. 원본 값은 저장하지 않아서 아주 작습니다.</p>
+    <p class="where"><b>쓰이는 곳</b> · VictoriaLogs 블록별 토큰 필터, ClickHouse <code>bloom_filter</code> skip index, RocksDB SSTable, Cassandra</p>
+  </div>
+  <div class="controls">
+    <input id="bl-word" type="text" value="timeout" aria-label="단어">
+    <button class="primary" id="bl-add">넣기</button>
+    <button id="bl-check">확인</button>
+    <span class="sep"></span>
+    <button id="bl-fp">false positive 찾기</button>
+    <span class="sep"></span>
+    <label for="bl-m">m <select id="bl-m"><option value="32">32비트</option><option value="64">64비트</option></select></label>
+    <label for="bl-k">k <select id="bl-k"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label>
+    <button id="bl-reset">초기화</button>
+  </div>
+  <div class="stage">
+    <div class="hashline" id="bl-hash">&nbsp;</div>
+    <div class="bits" id="bl-bits"></div>
+    <div><div class="lbl">넣은 값</div><div class="chips" id="bl-words"></div></div>
+  </div>
+  <div class="status" id="bl-status" aria-live="polite"></div>
+  <div class="counters" id="bl-ctr"></div>
+  <div class="key">
+    <h3>왜 효율적인가</h3>
+    <ul>
+      <li>원소당 약 10비트면 false positive가 약 1%입니다. 단어 길이와 상관없이 크기가 고정됩니다.</li>
+      <li>false positive 확률 p ≈ (1 − e<sup>−kn/m</sup>)<sup>k</sup>, 가장 좋은 k = (m/n)·ln 2 입니다. 값을 많이 넣을수록 1이 늘어 오탐이 많아집니다.</li>
+      <li>"없음"은 틀리지 않습니다. 그래서 블록을 <em>건너뛰는</em> 용도에 맞습니다. "있음"은 결국 블록을 읽어서 확인합니다.</li>
+      <li>해시 k개는 h<sub>1</sub> + i·h<sub>2</sub> 방식으로 두 해시에서 만듭니다 (Kirsch–Mitzenmacher). 이 페이지도 같은 방식입니다.</li>
+      <li>원소를 지울 수 없습니다. 불변 블록·part마다 하나씩 만드는 구조와 잘 맞습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ Sparse ============ -->
+<section class="sim" id="tab-sparse" aria-labelledby="sp-h" hidden>
+  <div class="sim-head">
+    <h2 id="sp-h">Sparse primary index: 행이 아니라 granule을 가리킨다</h2>
+    <p>ClickHouse part는 <code>ORDER BY (service, ts)</code>로 정렬되어 있고, 행을 granule 단위(기본 8192행, 여기선 6행)로 묶습니다. primary index는 각 granule 첫 행의 키만 저장합니다. 인덱스가 작아서 메모리에 전부 올라가고, 이진 탐색으로 읽을 granule 범위를 고릅니다.</p>
+    <p class="where"><b>쓰이는 곳</b> · ClickHouse <code>primary.idx</code> + 컬럼별 mark 파일, VictoriaLogs 블록 헤더의 시간 범위, LSM SSTable의 index block</p>
+  </div>
+  <div class="controls">
+    <select id="sp-svc" aria-label="서비스"><option>api</option><option>auth</option><option>cart</option><option selected>checkout</option><option>search</option></select>
+    <button class="primary" id="sp-q1">WHERE service = ?</button>
+    <span class="sep"></span>
+    <button id="sp-q2">WHERE status = 500 (인덱스 없음)</button>
+    <button id="sp-q3">WHERE status = 500 (minmax skip index)</button>
+    <button id="sp-reset">초기화</button>
+  </div>
+  <div class="stage">
+    <div><div class="lbl">primary.idx · granule마다 키 1개</div><div class="marks" id="sp-marks"></div></div>
+    <div><div class="lbl">part 데이터 · service · ts · status</div><div class="granules" id="sp-grs"></div></div>
+  </div>
+  <div class="status" id="sp-status" aria-live="polite"></div>
+  <div class="counters" id="sp-ctr"></div>
+  <div class="key">
+    <h3>왜 효율적인가</h3>
+    <ul>
+      <li>1억 행 part도 인덱스 항목은 1억 ÷ 8192 ≈ 12,200개뿐입니다. B-tree처럼 행마다 항목을 두지 않습니다.</li>
+      <li>데이터가 정렬되어 있으니 "이 키는 이 granule 사이에 있다"만 알면 충분합니다. 결과는 granule 단위라 약간 더 읽지만 순차 읽기입니다.</li>
+      <li>정렬 키의 앞쪽 컬럼일수록 잘 걸러집니다. 정렬 키에 없는 컬럼은 전체를 읽어야 해서 skip index(minmax, set, bloom_filter, text)로 보완합니다.</li>
+      <li>mark 파일은 granule 번호를 컬럼 파일 안의 위치(압축 블록 오프셋, 블록 안 오프셋)로 바꿔 줍니다. 필요한 컬럼의 필요한 granule만 읽습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ Inverted ============ -->
+<section class="sim" id="tab-inverted" aria-labelledby="iv-h" hidden>
+  <div class="sim-head">
+    <h2 id="iv-h">역인덱스: 토큰에서 행 번호로</h2>
+    <p>로그를 토큰으로 자르고, 토큰마다 그 토큰이 나온 행 번호 목록(posting list)을 저장합니다. 검색은 토큰의 posting list를 찾아 교집합(AND)이나 합집합(OR)을 구하면 끝입니다. bloom filter가 "이 블록엔 없다"를 알려 준다면, 역인덱스는 "이 행들에 있다"를 알려 줍니다.</p>
+    <p class="where"><b>쓰이는 곳</b> · ClickHouse text index (26.2부터 GA, <code>hasAllTokens</code> · <code>hasAnyTokens</code>), Elasticsearch/Lucene, Loki는 쓰지 않음 (라벨만 인덱싱)</p>
+  </div>
+  <div class="controls">
+    <input id="iv-q" type="text" value="db timeout" aria-label="검색어">
+    <label for="iv-mode">조건 <select id="iv-mode"><option value="all">모두 포함 (hasAllTokens)</option><option value="any">하나라도 (hasAnyTokens)</option></select></label>
+    <button class="primary" id="iv-run">검색</button>
+    <button id="iv-bloom">같은 검색을 bloom filter로</button>
+    <button id="iv-reset">초기화</button>
+  </div>
+  <div class="stage">
+    <div class="inv">
+      <div class="docs"><div class="lbl">로그 행 · 2행씩 블록</div><div id="iv-docs" class="docs"></div></div>
+      <div class="dict"><div class="lbl">사전 · 토큰 → posting list</div><div id="iv-dict"></div></div>
+    </div>
+    <div class="combine" id="iv-comb"></div>
+  </div>
+  <div class="status" id="iv-status" aria-live="polite"></div>
+  <div class="counters" id="iv-ctr"></div>
+  <div class="key">
+    <h3>왜 효율적인가</h3>
+    <ul>
+      <li>검색 비용이 전체 로그 양이 아니라 posting list 길이에 비례합니다. 드문 토큰일수록 빠릅니다.</li>
+      <li>posting list는 정렬된 정수 목록이라 차이값(delta) + 비트 패킹이나 Roaring bitmap으로 아주 작게 압축됩니다.</li>
+      <li>교집합은 정렬된 목록 두 개를 동시에 훑는 방식으로 O(a+b)에 끝납니다.</li>
+      <li>대가는 인덱스 크기와 쓰기 비용입니다. bloom filter는 작지만 "있을 수도"인 블록을 전부 읽어야 합니다.</li>
+      <li>토크나이저가 결과를 정합니다. <code>user_42</code>를 한 토큰으로 볼지 둘로 볼지에 따라 검색되는 것이 달라집니다.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ Gorilla ============ -->
+<section class="sim" id="tab-gorilla" aria-labelledby="go-h" hidden>
+  <div class="sim-head">
+    <h2 id="go-h">Gorilla 압축: 타임스탬프는 delta-of-delta, 값은 XOR</h2>
+    <p>Facebook Gorilla 논문(2015)의 방식입니다. 샘플 하나는 원래 타임스탬프 64비트 + float64 값 64비트 = 128비트입니다. 수집 간격이 일정하면 delta의 delta는 거의 0이고, 값이 천천히 변하면 이전 값과 XOR한 결과는 대부분 0 비트입니다. 둘 다 0을 1비트로 적어서 크기를 크게 줄입니다.</p>
+    <p class="where"><b>쓰이는 곳</b> · Prometheus TSDB chunk (같은 원리, 타임스탬프 구간 비트 수는 다름), ClickHouse <code>CODEC(DoubleDelta)</code> · <code>CODEC(Gorilla)</code>, InfluxDB. VictoriaMetrics는 값을 정수로 바꾼 뒤 다른 방식으로 압축</p>
+  </div>
+  <div class="controls">
+    <label for="go-preset">데이터 <select id="go-preset">
+      <option value="gauge">게이지 (CPU %)</option>
+      <option value="counter">카운터 (요청 수)</option>
+      <option value="const">값이 변하지 않음</option>
+      <option value="jitter">간격 흔들림 + 수집 누락</option>
+      <option value="random">랜덤 소수 (압축 안 되는 경우)</option>
+    </select></label>
+    <input id="go-vals" class="wide" type="text" aria-label="값 목록 (쉼표 구분)">
+    <button id="go-apply">값 적용</button>
+    <span class="sep"></span>
+    <button class="primary" id="go-play">처음부터 재생</button>
+    <button id="go-next">한 줄씩</button>
+    <button id="go-all">전체 보기</button>
+  </div>
+  <div class="stage">
+    <div class="gtbl"><table>
+      <thead><tr><th>#</th><th>t (초)</th><th>Δ</th><th>ΔΔ</th><th class="l">t 인코딩</th><th>비트</th><th>값</th><th class="l">이전 값 XOR (64비트)</th><th class="l">값 인코딩</th><th>비트</th></tr></thead>
+      <tbody id="go-body"></tbody>
+    </table></div>
+    <div class="cmp" id="go-cmp"></div>
+  </div>
+  <div class="status" id="go-status" aria-live="polite"></div>
+  <div class="counters" id="go-ctr"></div>
+  <div class="key">
+    <h3>인코딩 규칙 (논문 기준)</h3>
+    <ul>
+      <li>타임스탬프 ΔΔ = 0 → <code>0</code> (1비트). [−63, 64] → <code>10</code>+7비트, [−255, 256] → <code>110</code>+9비트, [−2047, 2048] → <code>1110</code>+12비트, 그 밖 → <code>1111</code>+32비트. 첫 Δ는 14비트.</li>
+      <li>값 XOR = 0 → <code>0</code> (1비트). 0이 아니면 앞쪽 0 개수와 뒤쪽 0 개수를 보고, 이전 블록 범위 안에 들어가면 <code>10</code>+의미 있는 비트만, 아니면 <code>11</code>+앞쪽 0 개수(5비트)+길이(6비트)+의미 있는 비트.</li>
+      <li>논문의 실제 데이터에서 평균 1.37바이트/샘플 (원래 16바이트). Prometheus는 밀리초 타임스탬프라 구간을 14 · 17 · 20비트로 넓혀 씁니다.</li>
+      <li>값이 무작위로 흔들리면 XOR 결과에 의미 있는 비트가 많아져 압축이 거의 안 됩니다. "랜덤 소수"를 골라 비교해 보세요.</li>
+    </ul>
+  </div>
+</section>
+</div>
+
+<script>
+(() => {
+const $ = (s) => document.querySelector(s);
+let delay = 700;
+class Player {
+  constructor(render) { this.render = render; this.q = []; this.t = null; }
+  push(f) { this.q.push(f); if (!this.t) this.tick(); }
+  tick() { const f = this.q.shift(); if (!f) { this.t = null; return; } this.render(f); this.t = setTimeout(() => this.tick(), delay); }
+  clear() { clearTimeout(this.t); this.t = null; this.q = []; }
+}
+function status(el, msg, kind) { el.className = 'status' + (kind ? ' k-' + kind : ''); el.textContent = msg; }
+function counters(el, items) { el.innerHTML = items.map(([v, l]) => `<div class="ctr"><b>${v}</b><span>${l}</span></div>`).join(''); }
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+$('#speed').addEventListener('input', (e) => { delay = +e.target.value; $('#speedv').textContent = (delay / 1000).toFixed(2) + 's'; });
+
+/* ================= tabs ================= */
+const TABS = ['bloom', 'sparse', 'inverted', 'gorilla'];
+function showTab() {
+  const h = location.hash.slice(1);
+  const t = TABS.includes(h) ? h : 'bloom';
+  TABS.forEach((x) => { $('#tab-' + x).hidden = x !== t; });
+  document.querySelectorAll('nav.tabs a').forEach((a) => { if (a.dataset.tab === t) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+}
+window.addEventListener('hashchange', showTab);
+
+/* ================= Bloom ================= */
+function fnv(s, seed) { let h = (0x811c9dc5 ^ seed) >>> 0; for (const ch of s) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193); } return h >>> 0; }
+let bl;
+function blPositions(w) {
+  const h1 = fnv(w, 0), h2 = (fnv(w, 0x5bd1e995) | 1) >>> 0;
+  const pos = [];
+  for (let i = 0; i < bl.k; i++) pos.push(((h1 + Math.imul(i, h2)) >>> 0) % bl.m);
+  return { h1, h2, pos };
+}
+function blSnap(extra) { return Object.assign({ bits: bl.bits.slice(), words: bl.words.slice(), fps: bl.fps.slice() }, extra); }
+function blRender(f) {
+  const hl = f.hl || {};
+  $('#bl-bits').style.gridTemplateColumns = `repeat(16, minmax(30px, 1fr))`;
+  $('#bl-bits').innerHTML = Array.from(f.bits, (b, i) => {
+    const c = (hl.set || []).includes(i) ? ' set' : (hl.zero || []).includes(i) ? ' zero' : (hl.probe || []).includes(i) ? ' probe' : '';
+    return `<div class="bit${b ? ' on' : ''}${c}"><b>${b}</b><small>${i}</small></div>`;
+  }).join('');
+  $('#bl-hash').innerHTML = f.hash || '&nbsp;';
+  $('#bl-words').innerHTML = f.words.map((w) => `<span class="chip">${esc(w)}</span>`).join('') +
+    f.fps.map((w) => `<span class="chip fp" title="넣지 않았는데 있을 수도라고 나온 값">${esc(w)} · 오탐</span>`).join('');
+  status($('#bl-status'), f.msg, f.kind);
+  const n = f.words.length, ones = f.bits.reduce((a, b) => a + b, 0);
+  const p = n ? Math.pow(1 - Math.exp(-bl.k * n / bl.m), bl.k) : 0;
+  counters($('#bl-ctr'), [[n, '넣은 값 n'], [`${bl.m} / ${bl.k}`, '비트 m / 해시 k'], [`${ones} (${Math.round(ones / bl.m * 100)}%)`, '1인 비트'],
+    [(p * 100).toFixed(1) + '%', '이론 false positive'], [n ? (bl.m / n * Math.LN2).toFixed(1) : '–', '최적 k = (m/n)·ln2'], [n ? (bl.m / n).toFixed(1) : '–', '원소당 비트']]);
+}
+const blPlayer = new Player(blRender);
+function blHashText(w, r) { return `h₁("${esc(w)}") = ${r.h1}, h₂ = ${r.h2} → 위치 = (h₁ + i·h₂) mod ${bl.m} = <b>${r.pos.join(', ')}</b>`; }
+function blAdd(w, emit) {
+  if (!w) return;
+  const r = blPositions(w);
+  emit(blSnap({ hash: blHashText(w, r), hl: { probe: r.pos }, msg: `"${w}"를 해시 ${bl.k}개로 위치 ${r.pos.join(', ')} 계산`, kind: 'read' }));
+  r.pos.forEach((p) => { bl.bits[p] = 1; });
+  if (!bl.words.includes(w)) bl.words.push(w);
+  bl.fps = bl.fps.filter((x) => x !== w);
+  emit(blSnap({ hash: blHashText(w, r), hl: { set: r.pos }, msg: `위치 ${r.pos.join(', ')}의 비트를 1로 켬. 원래 문자열은 어디에도 저장하지 않음`, kind: 'write' }));
+}
+function blCheck(w, emit) {
+  if (!w) return null;
+  const r = blPositions(w);
+  const zeros = r.pos.filter((p) => !bl.bits[p]);
+  emit(blSnap({ hash: blHashText(w, r), hl: { probe: r.pos }, msg: `"${w}" 확인: 위치 ${r.pos.join(', ')}의 비트를 봄`, kind: 'read' }));
+  if (zeros.length) {
+    emit(blSnap({ hash: blHashText(w, r), hl: { probe: r.pos, zero: zeros }, msg: `위치 ${zeros.join(', ')}가 0 → "${w}"는 넣은 적이 확실히 없음. 이 블록은 읽지 않아도 됨`, kind: 'skip' }));
+    return 'no';
+  }
+  if (bl.words.includes(w)) {
+    emit(blSnap({ hash: blHashText(w, r), hl: { probe: r.pos }, msg: `모두 1 → "있을 수도". 실제로 넣은 값이 맞음. 블록을 읽어서 확인`, kind: 'found' }));
+    return 'yes';
+  }
+  if (!bl.fps.includes(w)) bl.fps.push(w);
+  emit(blSnap({ hash: blHashText(w, r), hl: { probe: r.pos }, msg: `모두 1이지만 "${w}"는 넣은 적 없음 → false positive. 다른 값들이 켠 비트와 우연히 겹침. 블록을 읽어 봐야 없다는 걸 앎`, kind: 'write' }));
+  return 'fp';
+}
+function blFindFp() {
+  const cands = ['cache', 'retry', 'deadlock', 'panic', 'oom', 'refused', 'slow', 'gc', 'tls', 'dns', 'reset', 'denied', 'abort', 'kafka', 'redis', 'quota', 'busy', 'crash', 'leak', 'warn'];
+  const silentRes = [];
+  for (const w of cands) {
+    if (bl.words.includes(w)) continue;
+    const r = blPositions(w);
+    if (r.pos.every((p) => bl.bits[p])) { $('#bl-word').value = w; blCheck(w, (f) => blPlayer.push(f)); return; }
+    silentRes.push(w);
+  }
+  blPlayer.push(blSnap({ msg: `후보 ${silentRes.length}개를 확인했지만 오탐이 없음. 값을 더 넣거나 m을 32로 줄이면 오탐이 생깁니다`, kind: 'skip' }));
+}
+function blInit() {
+  blPlayer.clear();
+  bl = { m: +$('#bl-m').value, k: +$('#bl-k').value, bits: new Array(+$('#bl-m').value).fill(0), words: [], fps: [] };
+  ['error', 'GET', 'user42', 'checkout'].forEach((w) => blAdd(w, () => {}));
+  blRender(blSnap({ msg: `값 4개를 넣은 상태입니다. 단어를 넣거나 확인해 보세요. "false positive 찾기"는 넣지 않은 단어 중 오탐이 나는 것을 찾습니다.` }));
+}
+$('#bl-add').addEventListener('click', () => blAdd($('#bl-word').value.trim(), (f) => blPlayer.push(f)));
+$('#bl-check').addEventListener('click', () => blCheck($('#bl-word').value.trim(), (f) => blPlayer.push(f)));
+$('#bl-fp').addEventListener('click', blFindFp);
+$('#bl-reset').addEventListener('click', blInit);
+$('#bl-m').addEventListener('change', blInit);
+$('#bl-k').addEventListener('change', blInit);
+$('#bl-word').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#bl-add').click(); });
+
+/* ================= Sparse index ================= */
+const G = 6;
+const SVC = { api: 14, auth: 6, cart: 8, checkout: 10, search: 10 };
+const ERR = { checkout: [3, 7], search: [5] };
+const ROWS = [];
+Object.entries(SVC).forEach(([s, n]) => {
+  for (let i = 0; i < n; i++) {
+    const mm = 1 + i * 4 + (s.length % 3);
+    ROWS.push({ s, ts: `10:${String(mm).padStart(2, '0')}`, st: (ERR[s] || []).includes(i) ? 500 : 200 });
+  }
+});
+const GRS = [];
+for (let i = 0; i < ROWS.length; i += G) GRS.push(ROWS.slice(i, i + G).map((r, j) => Object.assign({ id: i + j }, r)));
+const MARKS = GRS.map((g) => g[0]);
+const mmOf = (g) => [Math.min(...g.map((r) => r.st)), Math.max(...g.map((r) => r.st))];
+let spStats = { read: '–', rows: '–', hit: '–' };
+function spRender(f) {
+  const hl = f.hl || {};
+  $('#sp-marks').innerHTML = MARKS.map((m, i) => {
+    const c = (hl.probe || []).includes(i) ? ' probe' : (hl.pick || []).includes(i) ? ' pick' : '';
+    return `<span class="mark${c}"><i>${i}</i>${m.s} ${m.ts}</span>`;
+  }).join('');
+  $('#sp-grs').innerHTML = GRS.map((g, i) => {
+    const c = (hl.read || []).includes(i) ? ' read' : (hl.cand || []).includes(i) ? ' cand' : (hl.skip || []).includes(i) ? ' skip' : '';
+    const mm = mmOf(g);
+    return `<div class="gr${c}"><header><span>granule ${i}</span><span class="mm">${f.showMM ? `status ${mm[0]}~${mm[1]}` : `${g.length}행`}</span></header>` +
+      g.map((r, j) => `<div class="r${j === 0 ? ' first' : ''}${(hl.hit || []).includes(r.id) ? ' hit' : ''}"><span>${r.s}</span><span>${r.ts}</span><span>${r.st}</span></div>`).join('') + '</div>';
+  }).join('');
+  status($('#sp-status'), f.msg, f.kind);
+  const st = f.stats || spStats;
+  counters($('#sp-ctr'), [[ROWS.length, `전체 행 (${GRS.length} granule)`], [MARKS.length, 'primary index 항목'], [st.read, '읽은 granule'], [st.rows, '읽은 행'], [st.hit, '조건에 맞는 행']]);
+}
+const spPlayer = new Player(spRender);
+const spEmit = (f) => spPlayer.push(f);
+function spQ1(q) {
+  spEmit({ msg: `WHERE service = '${q}': service는 정렬 키의 첫 컬럼 → primary index(메모리)를 이진 탐색`, kind: 'read' });
+  // lower bound: first mark with s >= q
+  let lo = 0, hi = MARKS.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1, ge = MARKS[mid].s >= q;
+    spEmit({ hl: { probe: [mid] }, msg: `시작 찾기: mark ${mid} = '${MARKS[mid].s}' ${ge ? `≥ '${q}' → 왼쪽 절반` : `< '${q}' → 오른쪽 절반`}`, kind: 'read' });
+    if (ge) hi = mid; else lo = mid + 1;
+  }
+  const start = Math.max(0, lo - 1);
+  lo = 0; hi = MARKS.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1, gt = MARKS[mid].s > q;
+    spEmit({ hl: { probe: [mid], pick: [start] }, msg: `끝 찾기: mark ${mid} = '${MARKS[mid].s}' ${gt ? `> '${q}' → 왼쪽 절반` : `≤ '${q}' → 오른쪽 절반`}`, kind: 'read' });
+    if (gt) hi = mid; else lo = mid + 1;
+  }
+  const end = lo;
+  const range = []; for (let i = start; i < end; i++) range.push(i);
+  const skip = GRS.map((_, i) => i).filter((i) => !range.includes(i));
+  spEmit({ hl: { pick: range, cand: range, skip }, msg: `granule ${start}~${end - 1}만 후보. granule ${start}은 '${MARKS[start].s}'로 시작하지만 뒤쪽에 '${q}'가 있을 수 있어 포함. 나머지 ${skip.length}개는 건너뜀`, kind: 'merge' });
+  const hits = ROWS.map((r, i) => ({ r, i })).filter((x) => x.r.s === q).map((x) => x.i);
+  spStats = { read: range.length, rows: range.length * G, hit: hits.length };
+  spEmit({ hl: { read: range, skip, hit: hits, pick: range }, stats: spStats, msg: `mark 파일로 컬럼 파일 위치를 찾아 granule ${range.length}개(${range.length * G}행)만 읽음 → ${hits.length}행 일치. 전체 ${ROWS.length}행 중 ${Math.round(range.length * G / ROWS.length * 100)}%만 읽음`, kind: 'found' });
+}
+function spQ2() {
+  const all = GRS.map((_, i) => i);
+  const hits = ROWS.map((r, i) => ({ r, i })).filter((x) => x.r.st === 500).map((x) => x.i);
+  spEmit({ msg: 'WHERE status = 500: status는 정렬 키가 아님 → primary index로 범위를 좁힐 수 없음', kind: 'read' });
+  spStats = { read: all.length, rows: ROWS.length, hit: hits.length };
+  spEmit({ hl: { read: all, hit: hits }, stats: spStats, msg: `granule ${all.length}개 전부 읽음 (full scan) → ${hits.length}행 일치. 대부분의 읽기가 헛수고`, kind: 'read' });
+}
+function spQ3() {
+  spEmit({ showMM: true, msg: 'minmax skip index: granule마다 status의 최솟값·최댓값을 저장해 둠. 500이 범위 안인지 확인', kind: 'read' });
+  const read = [], skip = [];
+  GRS.forEach((g, i) => {
+    const [a, b] = mmOf(g), ok = a <= 500 && 500 <= b;
+    (ok ? read : skip).push(i);
+    spEmit({ showMM: true, hl: { cand: ok ? [i] : [], read: ok ? read.slice(0, -1) : read.slice(), skip: skip.slice() }, msg: `granule ${i}: status ${a}~${b} → ${ok ? '500이 범위 안, 읽어야 함' : '500이 범위 밖, 건너뜀'}`, kind: ok ? 'merge' : 'skip' });
+  });
+  const hits = ROWS.map((r, i) => ({ r, i })).filter((x) => x.r.st === 500).map((x) => x.i);
+  spStats = { read: read.length, rows: read.length * G, hit: hits.length };
+  spEmit({ showMM: true, hl: { read, skip, hit: hits }, stats: spStats, msg: `granule ${read.length}개만 읽음 → ${hits.length}행 일치. 에러가 특정 구간에 몰려 있을 때 잘 동작. 고루 퍼져 있으면 효과가 없음`, kind: 'found' });
+}
+function spInit() { spPlayer.clear(); spStats = { read: '–', rows: '–', hit: '–' }; spRender({ msg: `${ROWS.length}행, granule ${GRS.length}개인 part입니다. 각 granule의 굵은 첫 행이 primary index 항목입니다.` }); }
+$('#sp-q1').addEventListener('click', () => spQ1($('#sp-svc').value));
+$('#sp-q2').addEventListener('click', spQ2);
+$('#sp-q3').addEventListener('click', spQ3);
+$('#sp-reset').addEventListener('click', spInit);
+
+/* ================= Inverted index ================= */
+const DOCS = [
+  'GET /cart 200 ok', 'db timeout on checkout', 'POST /checkout 500 db error', 'cache miss user 42',
+  'db connection timeout retry', 'GET /search 200 ok', 'checkout payment timeout', 'db slow query checkout'
+];
+const tok = (s) => s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+const DICT = new Map();
+DOCS.forEach((d, i) => tok(d).forEach((t) => { if (!DICT.has(t)) DICT.set(t, []); const l = DICT.get(t); if (!l.includes(i)) l.push(i); }));
+const TERMS = [...DICT.keys()].sort();
+let ivStats = { look: '–', res: '–', scan: '–' };
+function ivRender(f) {
+  const hl = f.hl || {};
+  $('#iv-docs').innerHTML = DOCS.map((d, i) => {
+    const c = (hl.hit || []).includes(i) ? ' hit' : (hl.scan || []).includes(i) ? ' scan' : '';
+    const text = d.split(/(\s+)/).map((w) => {
+      const on = tok(w).some((t) => (hl.terms || []).includes(t));
+      return on ? `<span class="t hl">${esc(w)}</span>` : esc(w);
+    }).join('');
+    return `<div class="doc${c}${f.blocks && i % 2 === 0 ? ' blk' : ''}"><i>${i}</i><span>${text}</span></div>`;
+  }).join('');
+  $('#iv-dict').innerHTML = '<table>' + TERMS.map((t) => {
+    const l = DICT.get(t);
+    return `<tr class="${(hl.probe || []).includes(t) ? 'probe' : ''}"><td>${esc(t)}</td><td>${l.map((x) => `<span class="p${(hl.res || []).includes(x) && (hl.probe || []).includes(t) ? ' in' : ''}">${x}</span>`).join('')}</td></tr>`;
+  }).join('') + '</table>';
+  $('#iv-comb').innerHTML = (f.comb || []).map((x) => `<div>${x}</div>`).join('');
+  status($('#iv-status'), f.msg, f.kind);
+  const st = f.stats || ivStats;
+  counters($('#iv-ctr'), [[DOCS.length, '로그 행'], [TERMS.length, '사전 토큰 수'], [st.look, '읽은 posting list'], [st.res, '결과 행'], [st.scan, '문자열 비교한 행']]);
+}
+const ivPlayer = new Player(ivRender);
+const ivEmit = (f) => ivPlayer.push(f);
+function ivRun() {
+  const qt = [...new Set(tok($('#iv-q').value))], mode = $('#iv-mode').value;
+  if (!qt.length) return;
+  const fn = mode === 'all' ? 'hasAllTokens' : 'hasAnyTokens';
+  ivEmit({ hl: { terms: [] }, comb: [`${fn}(message, [${qt.map((t) => `'${t}'`).join(', ')}])`], msg: `검색어를 같은 토크나이저로 자름 → ${qt.join(', ')}`, kind: 'read' });
+  const lists = [], comb = [`${fn}(message, [${qt.map((t) => `'${t}'`).join(', ')}])`];
+  const probes = [];
+  let acc = null;
+  for (const t of qt) {
+    const l = DICT.get(t) || [];
+    lists.push(l); probes.push(t);
+    comb.push(`${t.padEnd(12, ' ')} → [${l.join(', ')}]${DICT.has(t) ? '' : '  (사전에 없음)'}`);
+    acc = acc === null ? l.slice() : mode === 'all' ? acc.filter((x) => l.includes(x)) : [...new Set([...acc, ...l])].sort((a, b) => a - b);
+    ivEmit({ hl: { probe: probes.slice(), terms: probes.slice(), res: acc }, comb: comb.slice(), msg: `사전에서 '${t}' 찾기 → posting list [${l.join(', ')}]. ${mode === 'all' ? '교집합' : '합집합'} 결과 [${acc.join(', ')}]`, kind: 'read' });
+  }
+  comb.push(`${mode === 'all' ? '교집합' : '합집합'}      → [${acc.join(', ')}]`);
+  ivStats = { look: qt.length, res: acc.length, scan: 0 };
+  ivEmit({ hl: { probe: probes, terms: probes, res: acc, hit: acc }, comb, stats: ivStats, msg: `결과 행 ${acc.length}개: [${acc.join(', ')}]. 로그 본문은 한 줄도 훑지 않고 행 번호를 바로 얻음`, kind: 'found' });
+}
+function ivBloom() {
+  const qt = [...new Set(tok($('#iv-q').value))], mode = $('#iv-mode').value;
+  if (!qt.length) return;
+  ivEmit({ blocks: true, msg: `bloom filter 방식: 2행씩 블록을 만들고 블록마다 토큰 bloom filter를 둠 (ClickHouse tokenbf_v1, VictoriaLogs 방식)`, kind: 'read' });
+  const scan = [], skip = [];
+  for (let b = 0; b < DOCS.length; b += 2) {
+    const toks = new Set([...tok(DOCS[b]), ...tok(DOCS[b + 1] || '')]);
+    const maybe = mode === 'all' ? qt.every((t) => toks.has(t)) : qt.some((t) => toks.has(t));
+    (maybe ? scan : skip).push(b, b + 1);
+    ivEmit({ blocks: true, hl: { scan: scan.slice(), terms: qt }, msg: `블록 ${b / 2} (행 ${b}, ${b + 1}): bloom ${maybe ? '"있을 수도" → 블록을 읽고 행마다 토큰 비교' : '"없음" → 건너뜀'}`, kind: maybe ? 'read' : 'skip' });
+  }
+  const res = scan.filter((i) => mode === 'all' ? qt.every((t) => tok(DOCS[i]).includes(t)) : qt.some((t) => tok(DOCS[i]).includes(t)));
+  ivStats = { look: 0, res: res.length, scan: scan.length };
+  ivEmit({ blocks: true, hl: { scan, hit: res, terms: qt }, stats: ivStats, msg: `결과는 같은 ${res.length}행이지만 ${scan.length}행을 직접 읽어 비교함. 같은 블록 안의 다른 행에 토큰이 나뉘어 있으면 bloom은 "있을 수도"라고 답함`, kind: 'found' });
+}
+function ivInit() { ivPlayer.clear(); ivStats = { look: '–', res: '–', scan: '–' }; ivRender({ msg: '로그 8줄로 만든 사전입니다. 검색을 누르면 posting list를 찾아 합칩니다.' }); }
+$('#iv-run').addEventListener('click', ivRun);
+$('#iv-bloom').addEventListener('click', ivBloom);
+$('#iv-reset').addEventListener('click', ivInit);
+$('#iv-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') ivRun(); });
+
+/* ================= Gorilla ================= */
+const T0 = 1730000000;
+const fixed = (n) => Array.from({ length: n }, (_, i) => T0 + 15 * i);
+const PRESETS = {
+  gauge: { v: [12.5, 12.5, 12.75, 13, 13, 12.5, 12.5, 14.25, 40.1, 12.5] },
+  counter: { v: [1024, 1031, 1039, 1046, 1046, 1060, 1071, 1083, 1090, 1102] },
+  const: { v: [42, 42, 42, 42, 42, 42, 42, 42, 42, 42] },
+  jitter: { v: [12.5, 12.5, 12.75, 13, 13, 12.5, 12.5, 12.5, 12.75, 12.5], gaps: [15, 15, 16, 14, 15, 15, 30, 15, 15] },
+  random: { v: [0.8312, 0.1947, 0.5523, 0.9071, 0.3368, 0.7714, 0.0459, 0.6630, 0.2895, 0.4182] }
+};
+function tsFor(p, n) {
+  if (!p.gaps || p.gaps.length !== n - 1) return fixed(n);
+  const t = [T0]; p.gaps.forEach((g) => t.push(t[t.length - 1] + g)); return t;
+}
+const dv = new DataView(new ArrayBuffer(8));
+function bits64(x) { dv.setFloat64(0, x); return dv.getBigUint64(0); }
+function clz(b) { if (b === 0n) return 64; let n = 0; for (let i = 63; i >= 0; i--) { if ((b >> BigInt(i)) & 1n) break; n++; } return n; }
+function ctz(b) { if (b === 0n) return 64; let n = 0; while (!((b >> BigInt(n)) & 1n)) n++; return n; }
+function gorilla(ts, vs) {
+  const rows = [];
+  let prevD = 0, prevB = 0n, pL = null, pT = null;
+  for (let i = 0; i < ts.length; i++) {
+    const r = { i, t: ts[i], v: vs[i] };
+    if (i === 0) { r.tEnc = '원본'; r.tBits = 64; r.tMsg = '첫 타임스탬프는 64비트 그대로'; }
+    else {
+      const d = ts[i] - ts[i - 1]; r.d = d;
+      if (i === 1) { r.tEnc = 'Δ 14b'; r.tBits = 14; r.tMsg = `첫 간격 Δ=${d}을 14비트로`; }
+      else {
+        const dd = d - prevD; r.dd = dd;
+        const [c, p] = dd === 0 ? ['0', 0] : dd >= -63 && dd <= 64 ? ['10', 7] : dd >= -255 && dd <= 256 ? ['110', 9] : dd >= -2047 && dd <= 2048 ? ['1110', 12] : ['1111', 32];
+        r.tEnc = c + (p ? ` +${p}b` : ''); r.tBits = c.length + p;
+        r.tMsg = dd === 0 ? `간격이 이전과 같음 (ΔΔ=0) → '0' 1비트` : `간격이 ${prevD}→${d}로 바뀜 (ΔΔ=${dd}) → '${c}' + ${p}비트`;
+      }
+      prevD = d;
+    }
+    const b = bits64(vs[i]);
+    if (i === 0) { r.vEnc = '원본'; r.vBits = 64; r.vMsg = '첫 값은 64비트 그대로'; }
+    else {
+      const x = b ^ prevB; r.x = x;
+      if (x === 0n) { r.vEnc = '0'; r.vBits = 1; r.vMsg = `이전 값과 같음 → XOR = 0 → '0' 1비트`; }
+      else {
+        const L = Math.min(clz(x), 31), T = ctz(x);
+        if (pL !== null && L >= pL && T >= pT) {
+          const n = 64 - pL - pT; r.win = [pL, pT]; r.vEnc = `10 +${n}b`; r.vBits = 2 + n;
+          r.vMsg = `XOR의 의미 있는 비트가 이전 범위(앞 0 ${pL}개, 뒤 0 ${pT}개) 안 → '10' + ${n}비트`;
+        } else {
+          const n = 64 - L - T; r.win = [L, T]; r.vEnc = `11 +5+6+${n}b`; r.vBits = 13 + n;
+          r.vMsg = `새 범위: 앞 0 ${L}개, 뒤 0 ${T}개 → '11' + 앞 0 개수 5비트 + 길이 6비트 + ${n}비트`;
+          pL = L; pT = T;
+        }
+      }
+    }
+    prevB = b;
+    rows.push(r);
+  }
+  return rows;
+}
+function xorHTML(r) {
+  if (r.i === 0) return '<span class="z">—</span>';
+  const s = r.x.toString(2).padStart(64, '0');
+  if (r.x === 0n) return `<span class="xb"><span class="z">${s}</span></span>`;
+  const [L, T] = r.win;
+  return `<span class="xb"><span class="z">${s.slice(0, L)}</span><span class="m w">${s.slice(L, 64 - T)}</span><span class="z">${s.slice(64 - T)}</span></span>`;
+}
+let go = { rows: [], shown: 0 };
+const goPlayer = new Player((f) => goRender(f));
+function goRender(f) {
+  go.shown = f.shown;
+  const cur = f.shown - 1;
+  $('#go-body').innerHTML = go.rows.map((r, i) => `<tr class="${i === cur ? 'cur' : i >= f.shown ? 'pending' : ''}">
+    <td>${r.i}</td><td>${r.t}</td><td>${r.d ?? ''}</td><td>${r.dd ?? ''}</td><td class="l enc">${r.tEnc}</td><td class="bitsn">${r.tBits}</td>
+    <td>${r.v}</td><td class="l">${xorHTML(r)}</td><td class="l enc">${r.vEnc}</td><td class="bitsn">${r.vBits}</td></tr>`).join('');
+  const done = go.rows.slice(0, f.shown);
+  const tb = done.reduce((a, r) => a + r.tBits, 0), vb = done.reduce((a, r) => a + r.vBits, 0), raw = done.length * 128;
+  const pct = (x) => raw ? (x / raw * 100) : 0;
+  $('#go-cmp').innerHTML = done.length ? `
+    <div><span>원본</span><div class="bar"><span class="ts" style="width:50%"></span><span class="vs" style="width:50%"></span></div><b>${raw}b</b></div>
+    <div><span>Gorilla</span><div class="bar"><span class="ts" style="width:${pct(tb)}%"></span><span class="vs" style="width:${pct(vb)}%"></span></div><b>${tb + vb}b</b></div>` : '';
+  const r = go.rows[cur];
+  status($('#go-status'), f.msg || (r ? `#${r.i} 타임스탬프: ${r.tMsg}. 값: ${r.vMsg}.` : ''), r ? (r.tBits + r.vBits <= 4 ? 'found' : r.tBits + r.vBits > 40 ? 'write' : 'merge') : '');
+  counters($('#go-ctr'), [[done.length, '샘플'], [raw || '–', '원본 비트 (128/샘플)'], [done.length ? tb : '–', '타임스탬프 비트'], [done.length ? vb : '–', '값 비트'],
+    [done.length ? ((tb + vb) / 8 / done.length).toFixed(2) : '–', '바이트/샘플 (원본 16)'], [done.length ? (raw / (tb + vb)).toFixed(1) + '×' : '–', '압축률']]);
+}
+function goLoad(vals) {
+  goPlayer.clear();
+  const p = PRESETS[$('#go-preset').value];
+  const v = vals || p.v;
+  go.rows = gorilla(tsFor(vals && vals.length !== p.v.length ? {} : p, v.length), v);
+  $('#go-vals').value = v.join(', ');
+  goRender({ shown: go.rows.length, msg: '전체 결과입니다. "처음부터 재생"으로 한 샘플씩 볼 수 있습니다. 보라색 배경이 실제로 저장되는 XOR 비트입니다.' });
+}
+$('#go-preset').addEventListener('change', () => goLoad());
+$('#go-apply').addEventListener('click', () => {
+  const v = $('#go-vals').value.split(/[,\s]+/).map(Number).filter((x) => Number.isFinite(x));
+  if (v.length >= 2) goLoad(v.slice(0, 16));
+});
+$('#go-play').addEventListener('click', () => { goPlayer.clear(); for (let i = 1; i <= go.rows.length; i++) goPlayer.push({ shown: i }); });
+$('#go-next').addEventListener('click', () => { goPlayer.clear(); goRender({ shown: go.shown >= go.rows.length ? 1 : go.shown + 1 }); });
+$('#go-all').addEventListener('click', () => { goPlayer.clear(); goRender({ shown: go.rows.length }); });
+
+blInit(); spInit(); ivInit(); goLoad(); showTab();
+})();
+</script>
